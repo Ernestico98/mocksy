@@ -3,6 +3,7 @@
 import asyncio
 import json
 import tempfile
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI, File, HTTPException, UploadFile
@@ -14,22 +15,25 @@ from . import speech
 from .config import ROOT, SESSIONS, load_packs, load_settings, save_settings
 from .sessions import LANGUAGES, Session, create_session
 
-app = FastAPI()
 listeners: set[asyncio.Queue] = set()
 loop: asyncio.AbstractEventLoop | None = None
 sessions: dict[str, Session] = {}
+
+
+@asynccontextmanager
+async def lifespan(_app):
+    global loop
+    loop = asyncio.get_running_loop()
+    yield
+
+
+app = FastAPI(lifespan=lifespan)
 
 
 def broadcast(event: dict):
     if loop:
         for q in list(listeners):
             loop.call_soon_threadsafe(q.put_nowait, event)
-
-
-@app.on_event("startup")
-async def _startup():
-    global loop
-    loop = asyncio.get_running_loop()
 
 
 def get(sid: str) -> Session:

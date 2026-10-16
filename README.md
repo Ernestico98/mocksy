@@ -37,4 +37,7 @@ picked per session in the app.
 ./run.sh                 # backend on :8765
 cd web && pnpm dev       # UI with hot reload on :5173
 ```
+```sh
+scripts/test.sh         # backend + frontend tests
+```
 See `CLAUDE.md` for the architecture.

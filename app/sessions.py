@@ -247,23 +247,26 @@ class Session:
         """Lets the interviewer react while the candidate draws in silence."""
         while self.meta.get("status") == "live":
             time.sleep(4)
-            now = time.time()
-            it = self.interviewer
-            if not it or it.busy or self.candidate_speaking:
-                continue
-            if Counter(self.canvas_lines) == self.canvas_sent:
-                continue
-            if (now - self.last_canvas_change < 6 or now - self.last_candidate < SILENT_DRAWING_S
-                    or now - self.last_turn_end < SILENT_DRAWING_S
-                    or now - self.last_silent_prompt < SILENT_PROMPT_COOLDOWN_S):
-                continue
-            self.last_silent_prompt = now
-            quiet = fmt(now - max(self.last_candidate, self.last_turn_end))
-            parts = self.pending + self._canvas_diff()
-            self.pending = []
-            parts.append(f"[drawing silently · {self.clock()}] The candidate has been drawing without "
-                         f"speaking for {quiet}. Reply <silent/> unless a real interviewer would say something now.")
-            it.send("\n\n".join(parts))
+            self.maybe_prompt_silent_drawing(time.time())
+
+    def maybe_prompt_silent_drawing(self, now: float) -> bool:
+        it = self.interviewer
+        if not it or it.busy or self.candidate_speaking:
+            return False
+        if Counter(self.canvas_lines) == self.canvas_sent:
+            return False  # nothing new on the board
+        if (now - self.last_canvas_change < 6 or now - self.last_candidate < SILENT_DRAWING_S
+                or now - self.last_turn_end < SILENT_DRAWING_S
+                or now - self.last_silent_prompt < SILENT_PROMPT_COOLDOWN_S):
+            return False
+        self.last_silent_prompt = now
+        quiet = fmt(now - max(self.last_candidate, self.last_turn_end))
+        parts = self.pending + self._canvas_diff()
+        self.pending = []
+        parts.append(f"[drawing silently · {self.clock()}] The candidate has been drawing without "
+                     f"speaking for {quiet}. Reply <silent/> unless a real interviewer would say something now.")
+        it.send("\n\n".join(parts))
+        return True
 
     # ---------------------------------------------------------------- end + evaluation
     def finish(self):
@@ -347,7 +350,10 @@ def create_session(pack_id: str, company: str, level: str, focus: str, lang: str
     pack = get_pack(pack_id)
     settings = load_settings()
     slug = re.sub(r"[^a-z0-9]+", "-", (company or pack_id).lower()).strip("-")[:24]
-    path = SESSIONS / f"{time.strftime('%Y%m%d-%H%M%S')}-{slug}"
+    base = f"{time.strftime('%Y%m%d-%H%M%S')}-{slug}"
+    path, n = SESSIONS / base, 2
+    while path.exists():  # two sessions in the same second (double click, tests)
+        path, n = SESSIONS / f"{base}-{n}", n + 1
     (path / "audio").mkdir(parents=True)
     meta = {
         "id": path.name, "created": time.time(), "status": "setup",

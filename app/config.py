@@ -1,6 +1,7 @@
 """Config: config.toml defaults, overridden by data/settings.json (written by the UI)."""
 
 import json
+import os
 import tomllib
 from pathlib import Path
 
@@ -12,7 +13,8 @@ MODELS = ROOT / "models"
 with open(ROOT / "config.toml", "rb") as f:
     DEFAULTS = tomllib.load(f)
 
-DATA = (ROOT / DEFAULTS["app"]["data_dir"]).resolve()
+# MOCKSY_DATA_DIR lets tests (or a second instance) use a separate data folder.
+DATA = (ROOT / os.environ.get("MOCKSY_DATA_DIR", DEFAULTS["app"]["data_dir"])).resolve()
 SESSIONS = DATA / "sessions"
 SESSIONS.mkdir(parents=True, exist_ok=True)
 SETTINGS_FILE = DATA / "settings.json"

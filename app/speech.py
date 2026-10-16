@@ -9,18 +9,28 @@ from .config import DEFAULTS, MODELS
 
 KOKORO_LANG = {"en": "en-us", "es": "es"}
 
-_kokoro = Kokoro(str(MODELS / "kokoro-v1.0.onnx"), str(MODELS / "voices-v1.0.bin"))
+_kokoro: Kokoro | None = None
 _tts_lock = threading.Lock()
 _stt_lock = threading.Lock()
 
 
+def kokoro() -> Kokoro:
+    """Loaded on first use (~1 s), so importing the app stays fast."""
+    global _kokoro
+    with _tts_lock:
+        if _kokoro is None:
+            _kokoro = Kokoro(str(MODELS / "kokoro-v1.0.onnx"), str(MODELS / "voices-v1.0.bin"))
+    return _kokoro
+
+
 def voices() -> list[str]:
-    return sorted(v for v in _kokoro.get_voices() if v[:2] in ("af", "am", "bf", "bm", "ef", "em"))
+    return sorted(v for v in kokoro().get_voices() if v[:2] in ("af", "am", "bf", "bm", "ef", "em"))
 
 
 def synthesize(text: str, voice: str, lang: str, speed: float):
+    k = kokoro()
     with _tts_lock:
-        return _kokoro.create(text, voice=voice, speed=speed, lang=KOKORO_LANG.get(lang, "en-us"))
+        return k.create(text, voice=voice, speed=speed, lang=KOKORO_LANG.get(lang, "en-us"))
 
 
 def speakable(text: str) -> str:

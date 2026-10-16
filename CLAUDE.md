@@ -20,7 +20,10 @@ are spoken with local Kokoro TTS. At the end a second Claude call writes the eva
 - First time: `scripts/setup.sh` (venv, Python deps, model downloads)
 - `./run.sh` builds `web/` if needed and serves http://127.0.0.1:8765 (`./run.sh --build` to force a rebuild)
 - Frontend dev with hot reload: `./run.sh` in one terminal, `cd web && pnpm dev` in another (proxies `/api` and `/files`)
-- Checks: `cd web && pnpm typecheck`; backend has no test suite yet
+- Tests: `scripts/test.sh` (pytest + `pnpm typecheck` + vitest). Backend tests use a fake interviewer
+  (`tests/conftest.py`) and an isolated `MOCKSY_DATA_DIR`; `MOCKSY_LIVE=1` adds one real Claude Code
+  round trip with haiku (`tests/test_live.py`) — run it after touching `app/interviewer.py`
+- Frontend tests live next to the code (`web/src/lib/*.test.ts`): whiteboard description, VAD with synthetic audio
 - The built-in browser pane has no microphone: test voice in Chrome/Safari
 
 ## Interviewer protocol (see prompts/interviewer.md)
