@@ -3,6 +3,7 @@
 #   ./run.sh           build (if missing) + serve
 #   ./run.sh --build   force a fresh frontend build first
 cd "$(dirname "$0")"
+. scripts/node.sh
 if [ "$1" = "--build" ] || [ ! -d web/dist ]; then
   (cd web && pnpm install --frozen-lockfile && pnpm build) || exit 1
 fi

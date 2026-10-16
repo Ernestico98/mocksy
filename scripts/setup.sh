@@ -2,6 +2,7 @@
 # One-time setup: local venv + model downloads (models are not tracked in git).
 set -e
 cd "$(dirname "$0")/.."
+. scripts/node.sh
 PY=${PYTHON:-python3.11}
 [ -d .venv ] || "$PY" -m venv .venv
 .venv/bin/pip install -q --upgrade pip

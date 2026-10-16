@@ -19,7 +19,7 @@ writes a structured evaluation when you're done.
 
 ## Requirements
 - macOS on Apple Silicon (Whisper runs on MLX)
-- Python 3.11, Node 20+ and pnpm
+- Python 3.11, Node 24 LTS (`.nvmrc`; the scripts switch to it via nvm) and pnpm
 - [Claude Code](https://claude.com/claude-code) installed and logged in (`claude` on your PATH)
 
 ## Setup
