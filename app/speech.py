@@ -1,0 +1,77 @@
+"""Local speech: Kokoro (TTS) and Whisper via mlx (STT)."""
+
+import re
+import threading
+
+from kokoro_onnx import Kokoro
+
+from .config import DEFAULTS, MODELS
+
+KOKORO_LANG = {"en": "en-us", "es": "es"}
+
+_kokoro = Kokoro(str(MODELS / "kokoro-v1.0.onnx"), str(MODELS / "voices-v1.0.bin"))
+_tts_lock = threading.Lock()
+_stt_lock = threading.Lock()
+
+
+def voices() -> list[str]:
+    return sorted(v for v in _kokoro.get_voices() if v[:2] in ("af", "am", "bf", "bm", "ef", "em"))
+
+
+def synthesize(text: str, voice: str, lang: str, speed: float):
+    with _tts_lock:
+        return _kokoro.create(text, voice=voice, speed=speed, lang=KOKORO_LANG.get(lang, "en-us"))
+
+
+def speakable(text: str) -> str:
+    """Strip anything a TTS engine would read literally."""
+    text = re.sub(r"```.*?```", " ", text, flags=re.S)
+    text = re.sub(r"\[([^\]]+)\]\([^)]+\)", r"\1", text)
+    text = re.sub(r"[*_`#>|]+", "", text)
+    return re.sub(r"\s+", " ", text).strip()
+
+
+# ------------------------------------------------------------------ STT
+
+# Phrases Whisper is known to invent on silence or noise.
+HALLUCINATIONS = {
+    "thank you.", "thank you", "thanks for watching!", "thanks for watching.", "you",
+    "gracias.", "gracias", "subtítulos realizados por la comunidad de amara.org",
+    "¡gracias por ver!", "bye.", "okay.", ".",
+}
+
+
+def _collapse_loops(text: str) -> str:
+    """Remove a sentence or phrase repeated back-to-back (Whisper looping)."""
+    parts = re.split(r"(?<=[.!?])\s+", text)
+    out: list[str] = []
+    for p in parts:
+        if out and p.strip().lower() == out[-1].strip().lower():
+            continue
+        out.append(p)
+    text = " ".join(out)
+    # short phrase loops without punctuation: "as in your previous version as in your previous version ..."
+    return re.sub(r"\b((?:\w+\W+){2,8}?)(?:\1){2,}", r"\1", text, flags=re.I)
+
+
+def transcribe(path: str, lang: str) -> str:
+    import mlx_whisper
+
+    with _stt_lock:
+        r = mlx_whisper.transcribe(
+            path,
+            path_or_hf_repo=DEFAULTS["speech"]["whisper_model"],
+            language=lang,
+            condition_on_previous_text=False,
+        )
+    kept = []
+    for seg in r.get("segments", []):
+        if seg.get("no_speech_prob", 0) > 0.6 and seg.get("avg_logprob", 0) < -0.7:
+            continue  # probably silence
+        if seg.get("compression_ratio", 0) > 2.6:
+            seg = {**seg, "text": _collapse_loops(seg["text"])}
+        kept.append(seg["text"].strip())
+    text = _collapse_loops(" ".join(kept).strip())
+    if text.lower() in HALLUCINATIONS or len(text) < 2:
+        return ""
+    return text

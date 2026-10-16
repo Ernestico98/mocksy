@@ -1,3 +1,7 @@
 #!/bin/sh
-# Start the mock interview server at http://127.0.0.1:8765
-cd "$(dirname "$0")" && exec .venv/bin/uvicorn server:app --host 127.0.0.1 --port 8765
+# Start the app. Host/port come from config.toml.
+cd "$(dirname "$0")"
+PORT=$(.venv/bin/python -c "import tomllib;print(tomllib.load(open('config.toml','rb'))['app']['port'])")
+HOST=$(.venv/bin/python -c "import tomllib;print(tomllib.load(open('config.toml','rb'))['app']['host'])")
+echo "→ http://$HOST:$PORT"
+exec .venv/bin/uvicorn app.server:app --host "$HOST" --port "$PORT"

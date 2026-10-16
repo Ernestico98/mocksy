@@ -1,0 +1,22 @@
+# Defaults. Anything changed from the app's settings menu is saved to
+# data/settings.json and takes precedence over this file.
+
+[interviewer]
+# Model aliases understood by the Claude Code CLI: "haiku", "sonnet", "opus", "fable"
+# or a full model id.
+model = "sonnet"          # runs the live conversation (fast + cheaper)
+feedback_model = "opus"   # writes the final evaluation (slower, deeper)
+feedback_language = "es"  # the evaluation is written in this language, whatever the interview language
+
+[speech]
+whisper_model = "mlx-community/whisper-large-v3-turbo"
+speed = 1.0
+
+[speech.voices]
+en = "af_heart"
+es = "em_alex"
+
+[app]
+host = "127.0.0.1"
+port = 8765
+data_dir = "data"

@@ -1,12 +1,11 @@
 .venv/
 models/
+data/
 sessions/
-bridge/.cursor.json
 __pycache__/
 .DS_Store
 *.onnx
 *.bin
 *.safetensors
 *.gguf
-data/
 .env

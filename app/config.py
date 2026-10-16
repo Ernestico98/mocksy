@@ -1,0 +1,64 @@
+"""Config: config.toml defaults, overridden by data/settings.json (written by the UI)."""
+
+import json
+import tomllib
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent.parent
+PROMPTS = ROOT / "prompts"
+PACKS = PROMPTS / "packs"
+MODELS = ROOT / "models"
+
+with open(ROOT / "config.toml", "rb") as f:
+    DEFAULTS = tomllib.load(f)
+
+DATA = (ROOT / DEFAULTS["app"]["data_dir"]).resolve()
+SESSIONS = DATA / "sessions"
+SESSIONS.mkdir(parents=True, exist_ok=True)
+SETTINGS_FILE = DATA / "settings.json"
+
+# The few knobs the UI may change, flattened.
+EDITABLE = {
+    "model": DEFAULTS["interviewer"]["model"],
+    "feedback_model": DEFAULTS["interviewer"]["feedback_model"],
+    "feedback_language": DEFAULTS["interviewer"].get("feedback_language", "es"),
+    "speed": DEFAULTS["speech"]["speed"],
+    "voice_en": DEFAULTS["speech"]["voices"]["en"],
+    "voice_es": DEFAULTS["speech"]["voices"]["es"],
+}
+
+
+def load_settings() -> dict:
+    s = dict(EDITABLE)
+    try:
+        s.update({k: v for k, v in json.loads(SETTINGS_FILE.read_text()).items() if k in EDITABLE})
+    except (OSError, ValueError):
+        pass
+    return s
+
+
+def save_settings(patch: dict) -> dict:
+    s = load_settings()
+    s.update({k: v for k, v in patch.items() if k in EDITABLE and v not in (None, "")})
+    SETTINGS_FILE.write_text(json.dumps(s, indent=2))
+    return s
+
+
+def load_packs() -> list[dict]:
+    """Interview packs: prompts/packs/*.md with a TOML header between +++ lines."""
+    packs = []
+    for path in sorted(PACKS.glob("*.md")):
+        text = path.read_text()
+        _, header, body = text.split("+++", 2)
+        meta = tomllib.loads(header)
+        meta["id"] = path.stem
+        meta["body"] = body.strip()
+        packs.append(meta)
+    return packs
+
+
+def get_pack(pack_id: str) -> dict:
+    for p in load_packs():
+        if p["id"] == pack_id:
+            return p
+    raise KeyError(pack_id)
