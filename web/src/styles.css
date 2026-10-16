@@ -34,6 +34,8 @@ button, input, select { font: inherit; color: inherit; }
 
 .card { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); box-shadow: var(--shadow); padding: 20px; }
 .card h2 { margin: 0 0 14px; font-size: 16px; }
+fieldset.field { border: 0; padding: 0; margin: 0 0 14px; min-width: 0; }
+fieldset.field legend { padding: 0; margin-bottom: 6px; }
 .field { display: grid; gap: 6px; font-size: 13px; font-weight: 550; margin-bottom: 14px; }
 .field input, .field select { font-weight: 400; padding: 9px 10px; border: 1px solid var(--line); border-radius: 9px; background: var(--panel); }
 .row2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
@@ -49,6 +51,7 @@ button, input, select { font: inherit; color: inherit; }
 .pack input { grid-row: span 2; margin-top: 3px; }
 .pack strong { font-weight: 600; }
 .pack span { color: var(--muted); font-size: 12.5px; }
+.pack .phase-pills { grid-column: 2; font-size: 11.5px; }
 .pack:has(input:checked) { border-color: var(--accent); background: var(--panel-2); }
 .advanced { margin: 0 0 14px; }
 .advanced summary { cursor: pointer; font-size: 13px; font-weight: 550; margin-bottom: 10px; }
@@ -67,7 +70,8 @@ button, input, select { font: inherit; color: inherit; }
 .empty { color: var(--muted); font-size: 13px; padding: 8px 2px; }
 
 /* ---------------------------------------------------------------- session */
-#session { height: 100vh; display: grid; grid-template-rows: auto 1fr; }
+.session { height: 100vh; display: grid; grid-template-rows: auto 1fr; }
+.boot { padding: 40px 16px; color: var(--muted); text-align: center; }
 .bar { display: flex; align-items: center; gap: 12px; padding: 8px 14px; background: var(--panel); border-bottom: 1px solid var(--line); min-width: 0; }
 .bar .title { display: grid; line-height: 1.2; min-width: 0; max-width: 260px; }
 .bar .title strong { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -91,8 +95,9 @@ button, input, select { font: inherit; color: inherit; }
 .tabs { display: flex; gap: 2px; padding: 6px 8px 0; border-bottom: 1px solid var(--line); }
 .tabs button { border: 0; background: transparent; padding: 8px 12px; border-bottom: 2px solid transparent; cursor: pointer; color: var(--muted); }
 .tabs button.active { color: var(--ink); border-bottom-color: var(--ink); font-weight: 600; }
-.tab-body { display: grid; grid-template-rows: auto 1fr auto; min-height: 0; }
-#fbTab { display: block; overflow: auto; padding: 16px; }
+.tab-body { display: flex; flex-direction: column; min-height: 0; }
+.tab-body > .log { flex: 1; }
+.tab-body.scroll { display: block; overflow: auto; padding: 16px; }
 .banner { margin: 10px 12px 0; padding: 9px 12px; border-radius: 10px; background: var(--note); font-size: 13px; }
 
 .log { overflow-y: auto; padding: 14px 12px; display: flex; flex-direction: column; gap: 10px; min-height: 0; }
@@ -108,6 +113,7 @@ button, input, select { font: inherit; color: inherit; }
 @keyframes flash { 0%, 40% { box-shadow: 0 0 0 3px var(--warn); } }
 .divider { align-self: stretch; display: flex; align-items: center; gap: 10px; color: var(--muted); font-size: 12px; }
 .divider::before, .divider::after { content: ""; flex: 1; height: 1px; background: var(--line); }
+.msg-id { margin-left: auto; opacity: .5; font-size: 10.5px; }
 .replay { border: 1px solid var(--line); background: var(--panel); border-radius: 99px; cursor: pointer; font-size: 11px; padding: 0 8px; color: var(--ink); }
 .typing::after { content: "▍"; animation: blink 1s infinite; color: var(--muted); }
 @keyframes blink { 50% { opacity: 0; } }
@@ -134,7 +140,9 @@ button, input, select { font: inherit; color: inherit; }
 .board-wrap { display: grid; grid-template-rows: auto 1fr; min-height: 0; min-width: 0; }
 .board-bar { display: flex; align-items: center; gap: 10px; padding: 6px 12px; border-bottom: 1px solid var(--line); background: var(--panel); min-height: 37px; }
 .board { position: relative; min-height: 0; }
-.board > div { position: absolute; inset: 0; }
+.board > .excalidraw-wrapper, .board > div { position: absolute; inset: 0; }
+.board-snapshot { position: absolute; inset: 0; overflow: auto; display: grid; place-items: center; background: #fff; padding: 16px; }
+.board-snapshot img { max-width: 100%; height: auto; }
 .board-fallback { padding: 24px; color: var(--muted); }
 
 /* ---------------------------------------------------------------- feedback */
@@ -148,8 +156,9 @@ button, input, select { font: inherit; color: inherit; }
 .top3 { margin: 0; padding-left: 20px; }
 .top3 li { margin-bottom: 6px; }
 .review { list-style: none; padding: 0; margin: 0; display: grid; gap: 8px; }
-.review li { border: 1px solid var(--line); border-radius: 10px; padding: 8px 10px; cursor: pointer; }
-.review li:hover { background: var(--panel-2); }
+.review button { display: grid; gap: 2px; width: 100%; text-align: left; border: 1px solid var(--line); background: transparent;
+  border-radius: 10px; padding: 8px 10px; cursor: pointer; }
+.review button:hover { background: var(--panel-2); }
 .review .topic { font-weight: 600; font-size: 13px; }
 .review .ref { font-size: 11.5px; color: var(--muted); }
 .report :is(h2) { font-size: 14px; margin: 18px 0 6px; }

@@ -12,22 +12,38 @@ class Capture extends AudioWorkletProcessor {
 }
 registerProcessor("capture", Capture);`;
 
+export type MicState = "off" | "listening" | "ready" | "speaking" | "muted";
+export type MicMode = "hands-free" | "ptt";
+
 export class Mic {
-  constructor(opts = {}) {
-    this.mode = "hands-free";       // or "ptt"
-    this.endSilenceMs = 1300;       // silence that ends a turn
-    this.preRollMs = 350;           // audio kept from just before speech starts
-    this.isPlaybackActive = () => false;
-    this.onLevel = () => {};
-    this.onState = () => {};
-    this.onSpeechStart = () => {};
-    this.onUtterance = () => {};
+  mode: MicMode = "hands-free";
+  endSilenceMs = 1300;
+  preRollMs = 350;
+  state: MicState = "off";
+  isPlaybackActive: () => boolean = () => false;
+  onLevel: (level: number) => void = () => {};
+  onState: (state: MicState) => void = () => {};
+  onSpeechStart: () => void = () => {};
+  onUtterance: (wav: Blob) => void = () => {};
+
+  private stream: MediaStream | null = null;
+  private ctx: AudioContext | null = null;
+  private rate = 48000;
+  private noise = 0.004;
+  private level = 0;
+  private lastLevelEmit = 0;
+  private pre: Float32Array[] = [];
+  private rec: Float32Array[] | null = null;
+  private loudMs = 0;
+  private quietMs = 0;
+  private speechMs = 0;
+
+  constructor(opts: Partial<Pick<Mic, "mode" | "endSilenceMs" | "onLevel" | "onState" | "onSpeechStart" | "onUtterance" | "isPlaybackActive">> = {}) {
     Object.assign(this, opts);
-    this.state = "off";
   }
 
-  static supported() {
-    return !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia && window.AudioWorkletNode);
+  static supported(): boolean {
+    return typeof navigator.mediaDevices?.getUserMedia === "function" && typeof AudioWorkletNode !== "undefined";
   }
 
   async enable() {
@@ -43,36 +59,32 @@ export class Mic {
     const sink = this.ctx.createGain();
     sink.gain.value = 0;                       // keep the graph running, never play the mic back
     src.connect(node).connect(sink).connect(this.ctx.destination);
-    node.port.onmessage = (e) => this.#frame(e.data);
+    node.port.onmessage = (e: MessageEvent<Float32Array>) => this.frame(e.data);
     this.rate = this.ctx.sampleRate;
     this.noise = 0.004;
-    this.level = 0;
-    this.lastLevelEmit = 0;
     this.pre = [];
     this.rec = null;
-    this.loudMs = 0;
-    this.quietMs = 0;
-    this.#set(this.mode === "ptt" ? "ready" : "listening");
+    this.set(this.mode === "ptt" ? "ready" : "listening");
   }
 
   disable() {
     this.stream?.getTracks().forEach((t) => t.stop());
-    this.ctx?.close();
+    void this.ctx?.close();
     this.ctx = null;
     this.rec = null;
-    this.#set("off");
+    this.set("off");
   }
 
-  setMode(mode) {
+  setMode(mode: MicMode) {
     this.mode = mode;
     this.rec = null;
-    if (this.ctx) this.#set(mode === "ptt" ? "ready" : "listening");
+    if (this.ctx) this.set(mode === "ptt" ? "ready" : "listening");
   }
 
-  setMuted(muted) {
+  setMuted(muted: boolean) {
     if (!this.ctx) return;
     this.rec = null;
-    this.#set(muted ? "muted" : this.mode === "ptt" ? "ready" : "listening");
+    this.set(muted ? "muted" : this.mode === "ptt" ? "ready" : "listening");
   }
 
   // push-to-talk
@@ -80,20 +92,20 @@ export class Mic {
     if (!this.ctx) return;
     this.rec = [];
     this.speechMs = 0;
-    this.#set("speaking");
+    this.set("speaking");
     this.onSpeechStart();
   }
 
   stopTalking() {
-    if (this.rec) this.#finish(true);
+    if (this.rec) this.finish(true);
   }
 
-  #set(state) {
+  private set(state: MicState) {
     this.state = state;
     this.onState(state);
   }
 
-  #frame(f) {
+  private frame(f: Float32Array) {
     let sum = 0;
     for (let i = 0; i < f.length; i++) sum += f[i] * f[i];
     const rms = Math.sqrt(sum / f.length);
@@ -122,7 +134,7 @@ export class Mic {
           this.rec = this.pre.splice(0);
           this.speechMs = this.loudMs;
           this.quietMs = 0;
-          this.#set("speaking");
+          this.set("speaking");
           this.onSpeechStart();
         }
       } else {
@@ -136,20 +148,20 @@ export class Mic {
     if (rms > threshold * 0.6) { this.quietMs = 0; this.speechMs += dt; }
     else this.quietMs += dt;
     const totalMs = (this.rec.length * f.length / this.rate) * 1000;
-    if (this.quietMs >= this.endSilenceMs || totalMs > 180000) this.#finish(false);
+    if (this.quietMs >= this.endSilenceMs || totalMs > 180000) this.finish(false);
   }
 
-  #finish(manual) {
+  private finish(manual: boolean) {
     const frames = this.rec;
     this.rec = null;
     this.loudMs = 0;
-    this.#set(this.mode === "ptt" ? "ready" : "listening");
+    this.set(this.mode === "ptt" ? "ready" : "listening");
     if (!frames || this.speechMs < (manual ? 200 : 350)) return; // too short to be speech
     this.onUtterance(encodeWav(frames, this.rate));
   }
 }
 
-function encodeWav(frames, rate) {
+function encodeWav(frames: Float32Array[], rate: number): Blob {
   const len = frames.reduce((n, f) => n + f.length, 0);
   const all = new Float32Array(len);
   let o = 0;
@@ -167,7 +179,7 @@ function encodeWav(frames, rate) {
   }
   const buf = new ArrayBuffer(44 + pcm.length * 2);
   const dv = new DataView(buf);
-  const str = (off, s) => [...s].forEach((c, i) => dv.setUint8(off + i, c.charCodeAt(0)));
+  const str = (off: number, s: string) => [...s].forEach((c, i) => dv.setUint8(off + i, c.charCodeAt(0)));
   str(0, "RIFF"); dv.setUint32(4, 36 + pcm.length * 2, true); str(8, "WAVE");
   str(12, "fmt "); dv.setUint32(16, 16, true); dv.setUint16(20, 1, true); dv.setUint16(22, 1, true);
   dv.setUint32(24, target, true); dv.setUint32(28, target * 2, true); dv.setUint16(32, 2, true); dv.setUint16(34, 16, true);

@@ -222,4 +222,10 @@ async def events():
     return StreamingResponse(gen(), media_type="text/event-stream")
 
 
-app.mount("/", StaticFiles(directory=ROOT / "static", html=True), name="static")
+WEB = ROOT / "web" / "dist"
+if WEB.exists():
+    app.mount("/", StaticFiles(directory=WEB, html=True), name="web")
+else:
+    @app.get("/")
+    def not_built():
+        return {"error": "Frontend not built. Run: cd web && pnpm install && pnpm build (or ./run.sh)"}
