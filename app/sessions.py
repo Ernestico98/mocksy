@@ -173,7 +173,7 @@ class Session:
                 self.status("error", val)
             elif kind == "exit":
                 if self.meta.get("status") == "live" and not self.end_requested:
-                    self.status("error", "El entrevistador se detuvo; se reanudará con tu próximo mensaje.")
+                    self.status("error", "The interviewer stopped; it will resume with your next message.")
 
     def _current(self) -> dict:
         if not self.current:
@@ -269,12 +269,26 @@ class Session:
         return True
 
     # ---------------------------------------------------------------- end + evaluation
+    def stop(self):
+        """End the interview without evaluating it (it can still be evaluated later)."""
+        with self.lock:
+            if self.meta.get("status") != "live":
+                return
+            self.meta["status"] = "ended"
+            self.meta["ended_at"] = time.time()
+            self.tts_gen += 1  # drop speech still queued
+            self.save()
+        if self.interviewer:
+            self.interviewer.stop()
+        self.broadcast({"type": "meta", "meta": self.meta})
+        self.status("idle")
+
     def finish(self):
         with self.lock:
             if self.meta.get("status") != "live":
                 return
             self.meta["status"] = "evaluating"
-            self.meta["ended_at"] = time.time()
+            self.meta.setdefault("ended_at", time.time())  # keep it when evaluating a stopped session
             self.save()
         self.broadcast({"type": "meta", "meta": self.meta})
         time.sleep(1)  # let the closing line finish synthesizing
@@ -289,7 +303,7 @@ class Session:
         except Exception as e:  # keep the session usable; evaluation can be retried
             print("evaluation failed:", e)
             self.meta["status"] = "ended"
-            self.status("error", f"No se pudo generar la evaluación: {e}")
+            self.status("error", f"Couldn't generate the evaluation: {e}")
         self.save()
         self.broadcast({"type": "meta", "meta": self.meta})
         self.broadcast({"type": "feedback", "feedback": self.public()["feedback"]})
@@ -309,6 +323,7 @@ def render(template: Path, meta: dict, lang: str | None = None) -> str:
     values = SafeDict(
         pack=pack["body"], company=meta.get("company") or "none (generic)",
         level=meta.get("level") or "not specified", focus=meta.get("focus") or "none",
+        problem=meta.get("problem") or "none (choose one as described above)",
         rubric=", ".join(f'"{r}"' for r in meta.get("rubric") or pack.get("rubric", [])),
         phases=phases, phase_keys=", ".join(p["key"] for p in meta["phases"]),
         language_name=LANGUAGES.get(lang or meta["lang"], lang or meta["lang"]),
@@ -346,7 +361,7 @@ def evaluate(s: Session) -> dict:
 
 def create_session(pack_id: str, company: str, level: str, focus: str, lang: str,
                    model: str | None, feedback_model: str | None,
-                   broadcast: Callable[[dict], None]) -> Session:
+                   broadcast: Callable[[dict], None], problem: str = "") -> Session:
     pack = get_pack(pack_id)
     settings = load_settings()
     slug = re.sub(r"[^a-z0-9]+", "-", (company or pack_id).lower()).strip("-")[:24]
@@ -358,7 +373,7 @@ def create_session(pack_id: str, company: str, level: str, focus: str, lang: str
     meta = {
         "id": path.name, "created": time.time(), "status": "setup",
         "pack": pack_id, "pack_title": pack["title"], "company": company or pack.get("company", ""),
-        "level": level, "focus": focus, "lang": lang, "phases": pack["phases"],
+        "level": level, "focus": focus, "problem": problem, "lang": lang, "phases": pack["phases"],
         "rubric": pack.get("rubric", []),
         "model": model or settings["model"], "feedback_model": feedback_model or settings["feedback_model"],
     }

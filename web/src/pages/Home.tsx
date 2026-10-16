@@ -16,6 +16,7 @@ export default function Home({ meta }: { meta: AppMeta }) {
   const current = meta.packs.find((p) => p.id === pack)!;
   const [company, setCompany] = useState(current.company);
   const [level, setLevel] = useState(store.get("level", "Mid"));
+  const [problem, setProblem] = useState("");
   const [focus, setFocus] = useState("");
   const [lang, setLang] = useState(store.get("lang", "en"));
   const [micMode, setMicMode] = useState<MicMode>(store.get("micMode", "hands-free") as MicMode);
@@ -40,11 +41,11 @@ export default function Home({ meta }: { meta: AppMeta }) {
     store.set("micMode", micMode);
     try {
       await api.saveSettings({ model, feedback_model: feedbackModel });
-      const s = await api.createSession({ pack, company: company.trim(), level, focus: focus.trim(), lang, model, feedback_model: feedbackModel });
+      const s = await api.createSession({ pack, company: company.trim(), level, focus: focus.trim(), problem: problem.trim(), lang, model, feedback_model: feedbackModel });
       startIntent.autoEnableMic = true;
       go(s.meta.id);
     } catch (err) {
-      alert("No se pudo crear la sesión: " + (err as Error).message);
+      alert("Couldn't create the session: " + (err as Error).message);
       setStarting(false);
     }
   }
@@ -53,15 +54,15 @@ export default function Home({ meta }: { meta: AppMeta }) {
     <div className="home">
       <header className="home-head">
         <h1 className="brand">Mocksy</h1>
-        <p className="muted">Ensaya entrevistas técnicas en voz alta, con pizarra y un entrevistador que te evalúa al final.</p>
+        <p className="muted">Rehearse technical interviews out loud, with a whiteboard and an interviewer who evaluates you at the end.</p>
       </header>
 
       <div className="home-grid">
         <form className="card setup" onSubmit={start}>
-          <h2>Nueva entrevista</h2>
+          <h2>New interview</h2>
 
           <fieldset className="field">
-            <legend>Tipo de entrevista</legend>
+            <legend>Interview type</legend>
             <div className="packs">
               {meta.packs.map((p) => (
                 <label key={p.id} className="pack">
@@ -76,70 +77,75 @@ export default function Home({ meta }: { meta: AppMeta }) {
 
           <div className="row2">
             <label className="field">
-              <span>Empresa <span className="muted">(opcional)</span></span>
-              <input value={company} onChange={(e) => setCompany(e.target.value)} placeholder="p. ej. Stripe, Airbnb…" autoComplete="off" />
+              <span>Company <span className="muted">(optional)</span></span>
+              <input value={company} onChange={(e) => setCompany(e.target.value)} placeholder="e.g. Stripe, Airbnb…" autoComplete="off" />
             </label>
             <label className="field">
-              <span>Nivel</span>
+              <span>Level</span>
               <select value={level} onChange={(e) => setLevel(e.target.value)}>
-                <option value="">Sin especificar</option>
+                <option value="">Not specified</option>
                 {LEVELS.map((l) => <option key={l}>{l}</option>)}
               </select>
             </label>
           </div>
 
           <label className="field">
-            <span>Enfoque <span className="muted">(opcional)</span></span>
-            <input value={focus} onChange={(e) => setFocus(e.target.value)} placeholder="p. ej. presióname en modos de fallo y costes" autoComplete="off" />
+            <span>Problem <span className="muted">(optional — otherwise the interviewer picks one)</span></span>
+            <input value={problem} onChange={(e) => setProblem(e.target.value)} placeholder="e.g. a ride-sharing app that matches drivers in real time" autoComplete="off" />
+          </label>
+
+          <label className="field">
+            <span>Focus <span className="muted">(optional)</span></span>
+            <input value={focus} onChange={(e) => setFocus(e.target.value)} placeholder="e.g. push me on failure modes and costs" autoComplete="off" />
           </label>
 
           <div className="row2">
             <label className="field">
-              <span>Idioma de la entrevista</span>
+              <span>Interview language</span>
               <select value={lang} onChange={(e) => setLang(e.target.value)}>
-                {Object.entries(meta.languages).map(([k, v]) => <option key={k} value={k}>{v === "Spanish" ? "Español" : v}</option>)}
+                {Object.entries(meta.languages).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
               </select>
             </label>
             <label className="field">
-              <span>Micrófono</span>
+              <span>Microphone</span>
               <select value={micMode} onChange={(e) => setMicMode(e.target.value as MicMode)}>
-                <option value="hands-free">Manos libres (detecta cuándo hablas)</option>
-                <option value="ptt">Pulsar para hablar</option>
+                <option value="hands-free">Hands-free (detects when you talk)</option>
+                <option value="ptt">Push to talk</option>
               </select>
             </label>
           </div>
 
           <details className="advanced">
-            <summary>Modelos</summary>
+            <summary>Models</summary>
             <div className="row2">
               <label className="field">
-                <span>Entrevistador</span>
+                <span>Interviewer</span>
                 <select value={model} onChange={(e) => setModel(e.target.value)}>
                   {meta.models.map((m) => <option key={m}>{m}</option>)}
                 </select>
               </label>
               <label className="field">
-                <span>Evaluación final</span>
+                <span>Final evaluation</span>
                 <select value={feedbackModel} onChange={(e) => setFeedbackModel(e.target.value)}>
                   {meta.models.map((m) => <option key={m}>{m}</option>)}
                 </select>
               </label>
             </div>
-            <p className="hint">Se ejecutan con tu sesión de Claude Code. Para conversar conviene un modelo rápido; para evaluar, uno más profundo.</p>
+            <p className="hint">They run on your Claude Code login. A fast model works best for the conversation; a deeper one for the evaluation.</p>
           </details>
 
           <MicCheck />
 
           <button type="submit" className="btn primary big" disabled={starting}>
-            {starting ? "Preparando…" : "▶ Empezar entrevista"}
+            {starting ? "Preparing…" : "▶ Start interview"}
           </button>
         </form>
 
         <div className="card history">
-          <h2>Sesiones anteriores</h2>
+          <h2>Past sessions</h2>
           <ul className="history-list">
-            {history === null ? <li className="empty">Cargando…</li>
-              : history.length === 0 ? <li className="empty">Aún no hay sesiones. ¡Empieza la primera!</li>
+            {history === null ? <li className="empty">Loading…</li>
+              : history.length === 0 ? <li className="empty">No sessions yet. Start your first one!</li>
               : history.map((s) => <HistoryItem key={s.id} s={s} />)}
           </ul>
         </div>
@@ -150,8 +156,8 @@ export default function Home({ meta }: { meta: AppMeta }) {
 
 function HistoryItem({ s }: { s: SessionSummary }) {
   const d = new Date(s.created * 1000);
-  const when = d.toLocaleDateString("es", { day: "numeric", month: "short" }) + " · " +
-    d.toLocaleTimeString("es", { hour: "2-digit", minute: "2-digit" });
+  const when = d.toLocaleDateString("en", { day: "numeric", month: "short" }) + " · " +
+    d.toLocaleTimeString("en", { hour: "2-digit", minute: "2-digit" });
   const badge = s.verdict
     ? <span className={`badge ${VERDICT_TONE[s.verdict] || ""}`}>{s.verdict}</span>
     : <span className={`badge ${s.status === "live" ? "live" : ""}`}>{STATUS_LABEL[s.status] || s.status}</span>;
@@ -182,7 +188,7 @@ function MicCheck() {
 
   async function test() {
     if (!Mic.supported()) {
-      setMsg("Este navegador no permite el micrófono aquí. Abre la app en Chrome o Safari.");
+      setMsg("This browser doesn't allow the microphone here. Open the app in Chrome or Safari.");
       return;
     }
     stop();
@@ -190,16 +196,16 @@ function MicCheck() {
     mic.current = m;
     try {
       await m.enable();
-      setMsg("Habla: la barra debería moverse.");
-      timer.current = window.setTimeout(() => { stop(); setMsg("Listo."); }, 8000);
+      setMsg("Talk: the bar should move.");
+      timer.current = window.setTimeout(() => { stop(); setMsg("Done."); }, 8000);
     } catch (e) {
-      setMsg("Sin acceso al micrófono: " + (e as Error).message);
+      setMsg("No microphone access: " + (e as Error).message);
     }
   }
 
   return (
     <div className="mic-check">
-      <button type="button" className="btn" onClick={test}>🎙 Probar micrófono</button>
+      <button type="button" className="btn" onClick={test}>🎙 Test microphone</button>
       <div className="meter"><div style={{ width: `${Math.min(100, level * 900)}%` }} /></div>
       <span className="muted small">{msg}</span>
     </div>

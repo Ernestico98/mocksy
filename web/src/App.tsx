@@ -31,8 +31,8 @@ export default function App() {
     });
   }, []);
 
-  if (error) return <div className="boot">No puedo conectar con el servidor ({error}). ¿Está corriendo <code>./run.sh</code>?</div>;
-  if (!meta) return <div className="boot">Cargando…</div>;
+  if (error) return <div className="boot">Can't reach the server ({error}). Is <code>./run.sh</code> running?</div>;
+  if (!meta) return <div className="boot">Loading…</div>;
 
   return (
     <ConfirmProvider>

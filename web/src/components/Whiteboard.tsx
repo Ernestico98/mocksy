@@ -72,8 +72,8 @@ export default function Whiteboard({ sessionId, readOnly, onSynced, ref }: Props
   if (snapshotOnly) {
     return (
       <div className="board-snapshot">
-        <img src={`/files/${encodeURIComponent(sessionId)}/canvas.png`} alt="Último boceto de la sesión"
-          onError={(e) => { e.currentTarget.replaceWith(Object.assign(document.createElement("p"), { textContent: "Esta sesión no tiene pizarra guardada.", className: "muted" })); }} />
+        <img src={`/files/${encodeURIComponent(sessionId)}/canvas.png`} alt="Last sketch of the session"
+          onError={(e) => { e.currentTarget.replaceWith(Object.assign(document.createElement("p"), { textContent: "This session has no saved whiteboard.", className: "muted" })); }} />
       </div>
     );
   }

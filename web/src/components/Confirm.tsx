@@ -9,7 +9,7 @@ export function ConfirmProvider({ children }: { children: ReactNode }) {
   const [pending, setPending] = useState<{ text: string; yes: string; resolve: (v: boolean) => void } | null>(null);
 
   const ask = useCallback<Ask>(
-    (text, yes = "Sí") => new Promise((resolve) => setPending({ text, yes, resolve })),
+    (text, yes = "Yes") => new Promise((resolve) => setPending({ text, yes, resolve })),
     [],
   );
 
@@ -25,7 +25,7 @@ export function ConfirmProvider({ children }: { children: ReactNode }) {
         <div className="toast" role="alertdialog" aria-live="assertive">
           <span>{pending.text}</span>
           <button className="btn primary" autoFocus onClick={() => done(true)}>{pending.yes}</button>
-          <button className="btn" onClick={() => done(false)}>Cancelar</button>
+          <button className="btn" onClick={() => done(false)}>Cancel</button>
         </div>
       )}
     </Ctx.Provider>

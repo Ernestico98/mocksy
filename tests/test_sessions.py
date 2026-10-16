@@ -31,7 +31,7 @@ def test_start_spawns_interviewer_and_opens(session):
     assert session.meta["phase"]["key"] == "problem"
     assert it.sent == ["[system] start"]
     assert it.cwd == session.dir                      # file tools confined to the session folder
-    assert "Product Decomposition" in it.system_prompt and "Acme" in it.system_prompt
+    assert "product decomposition round" in it.system_prompt and "Acme" in it.system_prompt
     assert json.loads((session.dir / "meta.json").read_text())["status"] == "live"
 
 
@@ -235,6 +235,31 @@ def test_failed_evaluation_can_be_retried(session, monkeypatch):
     session.meta["status"] = "live"   # what POST /end does for an "ended" session
     session.finish()
     assert session.meta["status"] == "done"
+
+
+def test_stop_ends_without_evaluating_and_can_be_evaluated_later(session, monkeypatch):
+    called = []
+    monkeypatch.setattr(sessions, "evaluate", lambda s: called.append(1) or dict(FEEDBACK))
+    monkeypatch.setattr(sessions.time, "sleep", lambda s: None)
+    it = interviewer(session)
+    gen = session.tts_gen
+    session.stop()
+    assert session.meta["status"] == "ended" and it.stopped and not called
+    assert session.tts_gen == gen + 1             # queued speech is dropped
+    ended_at = session.meta["ended_at"]
+    session.stop()                                # idempotent
+    assert session.meta["ended_at"] == ended_at
+    session.meta["status"] = "live"               # what POST /end does for an "ended" session
+    session.finish()
+    assert session.meta["status"] == "done" and called
+    assert session.meta["ended_at"] == ended_at   # duration stays the interview's, not the evaluation's
+
+
+def test_requested_problem_reaches_both_prompts(session):
+    assert "Problem requested by the candidate: none" in interviewer(session).system_prompt
+    meta = session.meta | {"problem": "Design a URL shortener with analytics"}
+    for template in ("interviewer.md", "feedback.md"):
+        assert "Design a URL shortener with analytics" in sessions.render(sessions.PROMPTS / template, meta)
 
 
 def test_evaluate_parses_json_and_report(session, monkeypatch):

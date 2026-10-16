@@ -89,6 +89,7 @@ class NewSession(BaseModel):
     company: str = ""
     level: str = ""
     focus: str = ""
+    problem: str = ""
     lang: str = "en"
     model: str | None = None
     feedback_model: str | None = None
@@ -102,7 +103,7 @@ def new_session(body: NewSession):
             s.meta["status"] = "ended"
             s.save()
     s = create_session(body.pack, body.company, body.level, body.focus, body.lang,
-                       body.model, body.feedback_model, broadcast)
+                       body.model, body.feedback_model, broadcast, body.problem)
     sessions[s.id] = s
     s.start()
     return s.public()
@@ -183,6 +184,12 @@ class InterruptIn(BaseModel):
 @app.post("/api/sessions/{sid}/interrupt")
 def interrupt(sid: str, body: InterruptIn):
     get(sid).interrupt(body.message_id, body.heard_index)
+    return {"ok": True}
+
+
+@app.post("/api/sessions/{sid}/stop")
+def stop(sid: str):
+    get(sid).stop()
     return {"ok": True}
 
 

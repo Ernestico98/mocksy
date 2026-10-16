@@ -7,9 +7,11 @@ writes a structured evaluation when you're done.
 - **Talk naturally**: hands-free voice with automatic turn-taking; interrupt the interviewer any time.
 - **Draw**: an embedded Excalidraw whiteboard. The interviewer gets a text description of
   every change and looks at the full image when it needs to.
-- **Interview types**: product decomposition (incl. an product decomposition round), classic
-  system design, and easy to add your own (`prompts/packs/*.md`). Optionally tailored to a
-  target company with quick web research.
+- **Interview types**: product decomposition and classic system design, and easy to add your
+  own (`prompts/packs/*.md`, or `data/packs/*.md` for personal packs kept out of git).
+  Optionally tailored to a target company with quick web research, or to a problem you choose
+  ("a ride-sharing app that matches drivers in real time").
+- **Stop any time**: end with an evaluation, or just stop and evaluate later (or never).
 - **Evaluation**: verdict, rubric scores, top 3 things to practice, and links to the exact
   moments to review. Every session is saved and can be replayed.
 - **Local voice**: speech-to-text with Whisper (MLX) and text-to-speech with Kokoro run on

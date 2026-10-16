@@ -4,6 +4,7 @@ import re
 
 import pytest
 
+from app import config
 from app.config import PROMPTS, load_packs
 from app.sessions import render
 
@@ -11,7 +12,15 @@ PACKS = load_packs()
 
 
 def test_there_are_packs():
-    assert {p["id"] for p in PACKS} >= {"acme-product-decomposition", "product-decomposition", "system-design"}
+    assert {p["id"] for p in PACKS} >= {"product-decomposition", "system-design"}
+
+
+def test_personal_packs_load_from_the_data_dir(monkeypatch, tmp_path):
+    (tmp_path / "packs").mkdir()
+    (tmp_path / "packs" / "mine.md").write_text('+++\ntitle = "Mine"\nphases = []\n+++\nBrief.')
+    monkeypatch.setattr(config, "DATA", tmp_path)
+    mine = [p for p in config.load_packs() if p["id"] == "mine"]
+    assert mine and mine[0]["body"] == "Brief."
 
 
 @pytest.mark.parametrize("pack", PACKS, ids=lambda p: p["id"])

@@ -39,6 +39,7 @@ export interface SessionMeta {
   company: string;
   level: string;
   focus: string;
+  problem?: string;
   lang: string;
   phases: Phase[];
   rubric: string[];
@@ -115,7 +116,7 @@ export const api = {
   saveSettings: (patch: Partial<Settings>) => request<Settings>("/api/settings", patch),
   sessions: () => request<SessionSummary[]>("/api/sessions"),
   createSession: (body: {
-    pack: string; company: string; level: string; focus: string; lang: string; model: string; feedback_model: string;
+    pack: string; company: string; level: string; focus: string; problem: string; lang: string; model: string; feedback_model: string;
   }) => request<SessionData>("/api/sessions", body),
   session: (id: string) => request<SessionData>(s(id)),
   say: (id: string, text: string, kind: "speech" | "typed" = "speech") => request(`${s(id)}/say`, { text, kind }),
@@ -126,6 +127,7 @@ export const api = {
   activity: (id: string, speaking: boolean) => request(`${s(id)}/activity`, { speaking }),
   canvas: (id: string, body: { lines: string[]; png: string | null; scene: string }) => request(`${s(id)}/canvas`, body),
   end: (id: string) => request(`${s(id)}/end`, {}),
+  stop: (id: string) => request(`${s(id)}/stop`, {}),
   async transcribe(id: string, wav: Blob): Promise<string> {
     const fd = new FormData();
     fd.append("audio", wav, "turn.wav");

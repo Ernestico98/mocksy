@@ -6,7 +6,7 @@
 # or a full model id.
 model = "sonnet"          # runs the live conversation (fast + cheaper)
 feedback_model = "opus"   # writes the final evaluation (slower, deeper)
-feedback_language = "es"  # the evaluation is written in this language, whatever the interview language
+feedback_language = "en"  # the evaluation is written in this language, whatever the interview language
 
 [speech]
 whisper_model = "mlx-community/whisper-large-v3-turbo"

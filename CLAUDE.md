@@ -12,7 +12,8 @@ are spoken with local Kokoro TTS. At the end a second Claude call writes the eva
   - `speech.py` Kokoro TTS / mlx-whisper STT with hallucination filters
   - `config.py` `config.toml` defaults + `data/settings.json` overrides, interview packs
 - `prompts/interviewer.md`, `prompts/feedback.md` system prompts (`{placeholders}` filled from session meta)
-- `prompts/packs/*.md` interview types: TOML header between `+++` (title, phases, rubric) + interviewer brief
+- `prompts/packs/*.md` interview types: TOML header between `+++` (title, phases, rubric) + interviewer brief;
+  personal packs (e.g. company-specific) go in `data/packs/*.md` and stay out of git
 - `web/` React 19 + Vite + TypeScript, **pnpm** (not npm)
 - `data/` sessions and settings (gitignored); `models/` Kokoro weights (gitignored)
 
@@ -35,5 +36,5 @@ are spoken with local Kokoro TTS. At the end a second Claude call writes the eva
 - Don't use `--bare`: it forbids subscription (OAuth) auth
 
 ## Conventions
-- UI copy is Spanish; interview language is per session (`en`/`es`); evaluation language from settings
+- UI copy is English; interview language is per session (`en`/`es`); evaluation language from settings (default `en`)
 - Model weights, `data/`, `web/dist`, `web/node_modules` never go into git

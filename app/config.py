@@ -23,7 +23,7 @@ SETTINGS_FILE = DATA / "settings.json"
 EDITABLE = {
     "model": DEFAULTS["interviewer"]["model"],
     "feedback_model": DEFAULTS["interviewer"]["feedback_model"],
-    "feedback_language": DEFAULTS["interviewer"].get("feedback_language", "es"),
+    "feedback_language": DEFAULTS["interviewer"].get("feedback_language", "en"),
     "speed": DEFAULTS["speech"]["speed"],
     "voice_en": DEFAULTS["speech"]["voices"]["en"],
     "voice_es": DEFAULTS["speech"]["voices"]["es"],
@@ -47,9 +47,13 @@ def save_settings(patch: dict) -> dict:
 
 
 def load_packs() -> list[dict]:
-    """Interview packs: prompts/packs/*.md with a TOML header between +++ lines."""
+    """Interview packs: prompts/packs/*.md with a TOML header between +++ lines.
+
+    Personal packs (e.g. one tailored to a specific company) go in data/packs/,
+    which is gitignored: they show up in the app but never ship with the repo.
+    """
     packs = []
-    for path in sorted(PACKS.glob("*.md")):
+    for path in sorted(PACKS.glob("*.md")) + sorted((DATA / "packs").glob("*.md")):
         text = path.read_text()
         _, header, body = text.split("+++", 2)
         meta = tomllib.loads(header)

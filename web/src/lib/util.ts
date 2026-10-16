@@ -22,7 +22,7 @@ export const VERDICT_TONE: Record<string, "good" | "bad"> = {
 };
 
 export const STATUS_LABEL: Record<string, string> = {
-  live: "en curso", evaluating: "evaluando…", ended: "sin evaluar", setup: "preparando",
+  live: "in progress", evaluating: "evaluating…", ended: "not evaluated", setup: "preparing",
 };
 
 export function voiceName(v: string) {

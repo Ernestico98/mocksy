@@ -8,7 +8,7 @@ Your working directory contains:
 # Interview that was run
 {pack}
 
-Setup: company {company}, level {level}, focus {focus}, phases {phases}.
+Setup: company {company}, level {level}, requested problem {problem}, focus {focus}, phases {phases}.
 
 # Output
 Write the evaluation in {language_name}. Reply with ONLY the following, nothing before or after:

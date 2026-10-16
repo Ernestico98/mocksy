@@ -63,7 +63,7 @@ def events():
 
 @pytest.fixture
 def session(events):
-    s = sessions.create_session("acme-product-decomposition", "Acme", "Mid", "", "en",
+    s = sessions.create_session("product-decomposition", "Acme", "Mid", "", "en",
                                 "haiku", "haiku", events.append)
     s.start()
     return s

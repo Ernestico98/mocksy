@@ -71,6 +71,16 @@ def test_full_session_flow(client):
     assert data["meta"]["status"] == "done" and data["feedback"]["verdict"] == "hire"
 
 
+def test_stop_endpoint_ends_without_evaluation(client):
+    sid = new(client, problem="Design a chat app for 10k users")
+    it = FakeInterviewer.instances[-1]
+    assert "Design a chat app for 10k users" in it.system_prompt
+    assert client.post(f"/api/sessions/{sid}/stop").status_code == 200
+    data = client.get(f"/api/sessions/{sid}").json()
+    assert data["meta"]["status"] == "ended" and data["feedback"] is None and it.stopped
+    assert data["meta"]["problem"] == "Design a chat app for 10k users"
+
+
 def test_new_session_stops_the_previous_live_one(client):
     new(client)
     first = FakeInterviewer.instances[-1]

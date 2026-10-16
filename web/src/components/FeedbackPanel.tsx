@@ -12,14 +12,14 @@ export default function FeedbackPanel({ meta, feedback: f, onJump }: Props) {
     return (
       <div className="evaluating">
         <span className="dot think" />
-        <strong>Generando tu evaluación…</strong>
-        <span className="small">{meta.feedback_model} está revisando la conversación y tus bocetos. Suele tardar 1–3 minutos.</span>
+        <strong>Writing your evaluation…</strong>
+        <span className="small">{meta.feedback_model} is reviewing the conversation and your sketches. This usually takes 1–3 minutes.</span>
       </div>
     );
   }
   if (!f) {
     return meta.status === "ended"
-      ? <div className="evaluating">Todavía no hay evaluación. Usa «Reintentar evaluación» arriba.</div>
+      ? <div className="evaluating">This interview hasn't been evaluated. Use “Evaluate” above if you want feedback on it.</div>
       : null;
   }
   const scores = f.scores || {};
@@ -29,13 +29,13 @@ export default function FeedbackPanel({ meta, feedback: f, onJump }: Props) {
     <div className="fb">
       <div className="verdict">
         <span className={`badge ${VERDICT_TONE[f.verdict || ""] || ""}`}>{f.verdict || "—"}</span>
-        <span className="small muted">evaluado por {meta.feedback_model}</span>
+        <span className="small muted">evaluated by {meta.feedback_model}</span>
       </div>
       {f.summary && <p>{f.summary}</p>}
 
       {keys.length > 0 && (
         <>
-          <h3>Puntuación</h3>
+          <h3>Scores</h3>
           <div className="scores">
             {keys.map((k) => (
               <div className="score" key={k}>
@@ -50,21 +50,21 @@ export default function FeedbackPanel({ meta, feedback: f, onJump }: Props) {
 
       {f.top3?.length ? (
         <>
-          <h3>Top 3 para practicar</h3>
+          <h3>Top 3 to practice</h3>
           <ol className="top3">{f.top3.map((t, i) => <li key={i}>{t}</li>)}</ol>
         </>
       ) : null}
 
       {f.review?.length ? (
         <>
-          <h3>Para revisar</h3>
+          <h3>To review</h3>
           <ul className="review">
             {f.review.map((r, i) => (
               <li key={i}>
                 <button onClick={() => onJump(r.id)}>
                   <span className="topic">{r.topic}</span>
                   <span className="small">{r.what}</span>
-                  <span className="ref">ver momento #{r.id} →</span>
+                  <span className="ref">see moment #{r.id} →</span>
                 </button>
               </li>
             ))}
