@@ -1,0 +1,346 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Mock Interview · V2</title>
+<script>window.EXCALIDRAW_ASSET_PATH = "https://cdn.jsdelivr.net/npm/@excalidraw/excalidraw@0.17.6/dist/";</script>
+<script src="https://cdn.jsdelivr.net/npm/react@18.3.1/umd/react.production.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/react-dom@18.3.1/umd/react-dom.production.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@excalidraw/excalidraw@0.17.6/dist/excalidraw.production.min.js"></script>
+<style>
+  :root {
+    --bg: #f6f5f2; --panel: #ffffff; --ink: #1d1d1f; --muted: #6b6b70; --line: #e4e2dc;
+    --accent: #111; --int: #eef1ff; --cand: #f1f8ee; --rec: #e5484d; --warn: #b26b00;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--ink);
+    font: 14px/1.45 -apple-system, BlinkMacSystemFont, "Inter", system-ui, sans-serif; }
+  .app { display: grid; grid-template-rows: auto 1fr; height: 100vh; }
+  header { display: flex; align-items: center; gap: 12px; padding: 8px 14px; border-bottom: 1px solid var(--line);
+    background: var(--panel); flex-wrap: wrap; }
+  header h1 { font-size: 15px; margin: 0 8px 0 0; font-weight: 650; letter-spacing: -.01em; }
+  .phases { display: flex; gap: 4px; }
+  .phase { border: 1px solid var(--line); background: transparent; border-radius: 999px; padding: 4px 10px;
+    cursor: pointer; font: inherit; font-size: 12.5px; color: var(--muted); }
+  .phase.active { background: var(--accent); color: #fff; border-color: var(--accent); }
+  .timer { font-variant-numeric: tabular-nums; font-weight: 600; min-width: 92px; }
+  .timer.over { color: var(--warn); }
+  .spacer { flex: 1; }
+  select, header button.small { font: inherit; font-size: 12.5px; padding: 4px 8px; border: 1px solid var(--line);
+    border-radius: 8px; background: var(--panel); color: var(--ink); cursor: pointer; }
+  main { display: grid; grid-template-columns: 420px 1fr; min-height: 0; }
+  .left { display: grid; grid-template-rows: 1fr auto; border-right: 1px solid var(--line); background: var(--panel); min-height: 0; }
+  .log { overflow-y: auto; padding: 14px; display: flex; flex-direction: column; gap: 10px; }
+  .msg { padding: 9px 12px; border-radius: 12px; max-width: 92%; white-space: pre-wrap; word-wrap: break-word; }
+  .msg .who { font-size: 11px; color: var(--muted); margin-bottom: 2px; display: flex; gap: 8px; align-items: center; }
+  .msg.interviewer { background: var(--int); align-self: flex-start; }
+  .msg.candidate { background: var(--cand); align-self: flex-end; }
+  .msg.phase, .msg.note { align-self: center; background: transparent; color: var(--muted); font-size: 12px; text-align: center; }
+  .msg.note { border: 1px dashed var(--line); border-radius: 8px; color: var(--ink); text-align: left; }
+  .msg.speaking { outline: 2px solid #7c8cff; }
+  .msg img { max-width: 100%; border-radius: 8px; margin-top: 6px; border: 1px solid var(--line); }
+  .replay { border: 0; background: none; cursor: pointer; color: var(--muted); font-size: 12px; padding: 0; }
+  .compose { border-top: 1px solid var(--line); padding: 10px 12px 12px; display: grid; gap: 8px; }
+  .status { font-size: 12px; color: var(--muted); min-height: 18px; display: flex; align-items: center; gap: 6px; }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: #c8c6bf; }
+  .dot.live { background: var(--rec); animation: pulse 1s infinite; }
+  .dot.think { background: #7c8cff; animation: pulse 1.2s infinite; }
+  @keyframes pulse { 50% { opacity: .35; } }
+  textarea { width: 100%; resize: vertical; min-height: 60px; max-height: 200px; font: inherit; padding: 8px 10px;
+    border: 1px solid var(--line); border-radius: 10px; background: #fff; color: var(--ink); }
+  .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .btn { font: inherit; border: 1px solid var(--line); background: #fff; color: var(--ink); padding: 8px 12px; border-radius: 10px; cursor: pointer; }
+  .btn.primary { background: var(--accent); color: #fff; border-color: var(--accent); }
+  .mic { font-weight: 600; min-width: 150px; }
+  .mic.rec { background: var(--rec); color: #fff; border-color: var(--rec); }
+  .mic:disabled { opacity: .55; cursor: progress; }
+  label.chk { font-size: 12.5px; color: var(--muted); display: flex; gap: 5px; align-items: center; }
+  .hint { font-size: 11.5px; color: var(--muted); }
+  .canvas { position: relative; min-height: 0; }
+  #excalidraw { position: absolute; inset: 0; }
+  .canvas-bar { position: absolute; right: 14px; bottom: 14px; z-index: 5; display: flex; gap: 8px; }
+  .canvas-fallback { padding: 24px; color: var(--muted); }
+  @media (max-width: 900px) { main { grid-template-columns: 1fr; grid-template-rows: 55vh 70vh; } }
+</style>
+</head>
+<body>
+<div class="app">
+  <header>
+    <h1>Mock interview</h1>
+    <div class="phases" id="phases"></div>
+    <span class="timer" id="timer">00:00</span>
+    <button class="small" id="pause">Pausa</button>
+    <span class="spacer"></span>
+    <select id="lang" title="Idioma"><option value="en">English</option><option value="es">Español</option></select>
+    <select id="voice" title="Voz del entrevistador"></select>
+    <select id="speed" title="Velocidad">
+      <option value="0.9">0.9×</option><option value="1" selected>1.0×</option><option value="1.1">1.1×</option><option value="1.2">1.2×</option>
+    </select>
+    <button class="small" id="reset">Nueva sesión</button>
+  </header>
+  <main>
+    <section class="left">
+      <div class="log" id="log"></div>
+      <div class="compose">
+        <div class="status"><span class="dot" id="dot"></span><span id="status">Pulsa “Hablar” para empezar.</span></div>
+        <textarea id="draft" placeholder="Tu respuesta transcrita aparece aquí (puedes editarla o escribir)…"></textarea>
+        <div class="row">
+          <button class="btn mic" id="mic">🎙 Hablar</button>
+          <button class="btn primary" id="send">Enviar</button>
+          <label class="chk"><input type="checkbox" id="autosend" checked> enviar al terminar</label>
+        </div>
+        <div class="hint">Atajo: <b>Ctrl+M</b> empieza/para de grabar · <b>⌘+Enter</b> envía el texto · al hablar se corta el audio del entrevistador.</div>
+      </div>
+    </section>
+    <section class="canvas">
+      <div id="excalidraw"><div class="canvas-fallback">Cargando Excalidraw…</div></div>
+      <div class="canvas-bar">
+        <button class="btn primary" id="sendWire">📤 Enviar wireframe al entrevistador</button>
+      </div>
+    </section>
+  </main>
+</div>
+
+<script type="module">
+const $ = (id) => document.getElementById(id);
+const api = (path, body) => fetch(path, body === undefined ? {} : {
+  method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
+}).then(r => r.json());
+
+// ------------------------------------------------------------ phases & timer
+const PHASES = [
+  { key: "problem", label: "1 · Problema", mins: 15 },
+  { key: "wireframe", label: "2 · Wireframe", mins: 15 },
+  { key: "design", label: "3 · System design", mins: 25 },
+  { key: "feedback", label: "Feedback", mins: 0 },
+];
+let phase = null, phaseStart = 0, paused = false, pausedAt = 0;
+function renderPhases() {
+  $("phases").innerHTML = "";
+  for (const p of PHASES) {
+    const b = document.createElement("button");
+    b.className = "phase" + (phase?.key === p.key ? " active" : "");
+    b.textContent = p.label;
+    b.onclick = () => setPhase(p);
+    $("phases").append(b);
+  }
+}
+function setPhase(p, notify = true) {
+  if (phase?.key === p.key) return;
+  phase = p; phaseStart = Date.now(); paused = false; $("pause").textContent = "Pausa";
+  renderPhases();
+  if (notify) api("/api/candidate", { text: `PHASE → ${p.label}` + (p.mins ? ` (${p.mins} min)` : ""), kind: "phase" });
+}
+$("pause").onclick = () => {
+  if (!phase) return;
+  if (paused) { phaseStart += Date.now() - pausedAt; paused = false; $("pause").textContent = "Pausa"; }
+  else { pausedAt = Date.now(); paused = true; $("pause").textContent = "Seguir"; }
+};
+setInterval(() => {
+  if (!phase) return;
+  const elapsed = ((paused ? pausedAt : Date.now()) - phaseStart) / 1000;
+  const mm = String(Math.floor(elapsed / 60)).padStart(2, "0"), ss = String(Math.floor(elapsed % 60)).padStart(2, "0");
+  $("timer").textContent = `${mm}:${ss}` + (phase.mins ? ` / ${phase.mins}:00` : "");
+  $("timer").classList.toggle("over", phase.mins && elapsed > phase.mins * 60);
+}, 500);
+renderPhases();
+
+// ------------------------------------------------------------ transcript
+const msgEls = new Map();
+function addMessage(m) {
+  if (msgEls.has(m.id)) return;
+  const el = document.createElement("div");
+  const cls = m.kind === "phase" ? "phase" : m.kind === "note" ? "note" : m.role;
+  el.className = "msg " + cls;
+  if (cls === "phase") { el.textContent = m.text; }
+  else {
+    const who = document.createElement("div");
+    who.className = "who";
+    who.textContent = m.role === "interviewer" ? (m.kind === "note" ? "Nota del entrevistador" : "Entrevistador") : (m.kind === "wireframe" ? "Tú · wireframe" : "Tú");
+    if (m.role === "interviewer" && m.kind === "speech") {
+      const r = document.createElement("button");
+      r.className = "replay"; r.textContent = "↻ repetir"; r.onclick = () => replay(m.id);
+      who.append(r);
+    }
+    el.append(who, document.createTextNode(m.text));
+    if (m.kind === "wireframe" && m.image_url) { const img = new Image(); img.src = m.image_url; el.append(img); }
+  }
+  $("log").append(el);
+  msgEls.set(m.id, el);
+  $("log").scrollTop = $("log").scrollHeight;
+  if (m.role === "interviewer") setThinking(false);
+}
+
+// ------------------------------------------------------------ audio playback
+const clips = new Map();       // message_id -> [url...]
+const queue = [];
+let current = null, blocked = null;
+function remember(ev) {
+  if (!clips.has(ev.message_id)) clips.set(ev.message_id, []);
+  clips.get(ev.message_id)[ev.index] = ev.url;
+}
+function enqueue(ev) {
+  remember(ev);
+  if (!recording) { queue.push(ev); if (!current) playNext(); }
+}
+function playNext() {
+  document.querySelectorAll(".msg.speaking").forEach(e => e.classList.remove("speaking"));
+  const ev = queue.shift();
+  if (!ev) { current = null; if (!recording && !busy) status("Tu turno."); return; }
+  const audio = new Audio(ev.url);
+  current = audio;
+  msgEls.get(ev.message_id)?.classList.add("speaking");
+  status("El entrevistador está hablando…");
+  let done = false;
+  const next = () => { if (done || current !== audio) return; done = true; current = null; playNext(); };
+  audio.onended = next;
+  audio.onerror = next;  // missing/broken clip: skip it, never retry
+  audio.play().catch((e) => {
+    if (e.name !== "NotAllowedError") return next();
+    // autoplay blocked: wait for one click, then resume from this clip
+    done = true; current = null; blocked = ev;
+    status("Haz clic en cualquier sitio para activar el audio.");
+  });
+}
+document.addEventListener("click", () => {
+  if (blocked && !current) { queue.unshift(blocked); blocked = null; playNext(); }
+});
+function stopAudio() {
+  queue.length = 0; blocked = null;
+  if (current) { const a = current; current = null; a.pause(); }
+  playNext();
+}
+function replay(id) {
+  stopAudio();
+  (clips.get(id) || []).filter(Boolean).forEach((url, index) => queue.push({ message_id: id, index, url }));
+  playNext();
+}
+
+// ------------------------------------------------------------ status
+let busy = false;
+function status(t, dot = "") { $("status").textContent = t; $("dot").className = "dot " + dot; }
+function setThinking(on) { busy = on; if (on) status("El entrevistador está pensando…", "think"); else if (!current) status("Tu turno."); }
+
+// ------------------------------------------------------------ recording
+let recorder = null, chunks = [], recording = false, stream = null;
+async function toggleMic() {
+  if (recording) return recorder.stop();
+  try { stream ??= await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true } }); }
+  catch (e) { status("No hay acceso al micrófono: " + e.message); return; }
+  stopAudio();
+  chunks = [];
+  recorder = new MediaRecorder(stream);
+  recorder.ondataavailable = (e) => e.data.size && chunks.push(e.data);
+  recorder.onstop = transcribe;
+  recorder.start();
+  recording = true;
+  $("mic").classList.add("rec"); $("mic").textContent = "■ Parar y transcribir";
+  status("Escuchando…", "live");
+}
+async function transcribe() {
+  recording = false;
+  $("mic").classList.remove("rec"); $("mic").textContent = "🎙 Hablar"; $("mic").disabled = true;
+  status("Transcribiendo…", "think");
+  const fd = new FormData();
+  fd.append("audio", new Blob(chunks, { type: recorder.mimeType }), "answer.webm");
+  try {
+    const { text } = await fetch("/api/transcribe", { method: "POST", body: fd }).then(r => r.json());
+    $("draft").value = ($("draft").value + " " + (text || "")).trim();
+    if ($("autosend").checked) await send(); else status("Revisa el texto y pulsa Enviar.");
+  } catch (e) { status("Error al transcribir: " + e.message); }
+  $("mic").disabled = false;
+}
+async function send() {
+  const text = $("draft").value.trim();
+  if (!text) return;
+  $("draft").value = "";
+  if (!phase) setPhase(PHASES[0], false);
+  await api("/api/candidate", { text });
+  setThinking(true);
+}
+$("mic").onclick = toggleMic;
+$("send").onclick = send;
+$("draft").addEventListener("keydown", (e) => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) { e.preventDefault(); send(); } });
+window.addEventListener("keydown", (e) => {
+  if (e.ctrlKey && (e.key === "m" || e.key === "M")) { e.preventDefault(); e.stopPropagation(); toggleMic(); }
+}, true);
+
+// ------------------------------------------------------------ settings
+async function loadState() {
+  const s = await api("/api/state");
+  $("voice").innerHTML = s.voices.filter(v => /^(a|b|e)[fm]_/.test(v)).map(v => `<option>${v}</option>`).join("");
+  applySettings(s.settings);
+  $("log").innerHTML = ""; msgEls.clear();
+  stopAudio(); clips.clear();
+  s.messages.forEach(addMessage);
+  s.messages.forEach(m => (m.audio || []).forEach((url, index) => remember({ message_id: m.id, index, url })));
+  // page opened/reloaded right after the interviewer spoke: play that line
+  const last = s.messages[s.messages.length - 1];
+  if (last?.role === "interviewer" && last.kind === "speech" && Date.now() / 1000 - last.ts < 120) replay(last.id);
+}
+function applySettings(st) { $("lang").value = st.lang; $("voice").value = st.voice; $("speed").value = String(st.speed); }
+$("lang").onchange = () => api("/api/settings", { lang: $("lang").value }).then(applySettings);
+$("voice").onchange = () => api("/api/settings", { voice: $("voice").value });
+$("speed").onchange = () => api("/api/settings", { speed: parseFloat($("speed").value) });
+$("reset").onclick = async () => {
+  if (!confirm("¿Empezar una sesión nueva? (la anterior queda guardada en sessions/)")) return;
+  await api("/api/reset", {});
+  phase = null; $("timer").textContent = "00:00"; renderPhases();
+  try { localStorage.removeItem("mock-scene"); } catch {}
+  excalidrawAPI?.resetScene();
+};
+
+// ------------------------------------------------------------ live events
+const es = new EventSource("/api/events");
+es.onmessage = (e) => {
+  const ev = JSON.parse(e.data);
+  if (ev.type === "message") addMessage(ev.message);
+  else if (ev.type === "audio") enqueue(ev);
+  else if (ev.type === "settings") applySettings(ev.settings);
+  else if (ev.type === "reset") loadState();
+};
+loadState();
+
+// ------------------------------------------------------------ excalidraw
+let excalidrawAPI = null, exportToBlob = null;
+try {
+  const React = window.React, Ex = window.ExcalidrawLib;
+  if (!Ex) throw new Error("ExcalidrawLib no disponible");
+  const createRoot = window.ReactDOM.createRoot;
+  exportToBlob = Ex.exportToBlob;
+  let saved = null;
+  try { saved = JSON.parse(localStorage.getItem("mock-scene") || "null"); } catch {}
+  let saveTimer = null;
+  createRoot($("excalidraw")).render(React.createElement(Ex.Excalidraw, {
+    excalidrawAPI: (a) => (excalidrawAPI = a),
+    initialData: saved ? { elements: saved, appState: { viewBackgroundColor: "#ffffff" } } : { appState: { viewBackgroundColor: "#ffffff" } },
+    onChange: (elements) => {
+      clearTimeout(saveTimer);
+      saveTimer = setTimeout(() => { try { localStorage.setItem("mock-scene", JSON.stringify(elements)); } catch {} }, 800);
+    },
+  }));
+} catch (e) {
+  $("excalidraw").innerHTML = `<div class="canvas-fallback">No se pudo cargar Excalidraw (${e.message}). Usa excalidraw.com en otra pestaña.</div>`;
+}
+
+$("sendWire").onclick = async () => {
+  if (!excalidrawAPI) return;
+  const elements = excalidrawAPI.getSceneElements();
+  if (!elements.length) { status("El lienzo está vacío."); return; }
+  const blob = await exportToBlob({
+    elements, files: excalidrawAPI.getFiles(), mimeType: "image/png",
+    appState: { ...excalidrawAPI.getAppState(), exportBackground: true, viewBackgroundColor: "#ffffff" },
+    exportPadding: 24,
+  });
+  const dataUrl = await new Promise(res => { const r = new FileReader(); r.onload = () => res(r.result); r.readAsDataURL(blob); });
+  const fd = new FormData();
+  fd.append("image", dataUrl);
+  fd.append("note", $("draft").value.trim() || "Here's my current wireframe.");
+  $("draft").value = "";
+  await fetch("/api/wireframe", { method: "POST", body: fd });
+  setThinking(true);
+};
+</script>
+</body>
+</html>
