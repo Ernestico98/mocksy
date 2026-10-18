@@ -344,8 +344,15 @@ def transcript_markdown(s: Session) -> str:
 def evaluate(s: Session) -> dict:
     (s.dir / "transcript.md").write_text(transcript_markdown(s))
     prompt = render(PROMPTS / "feedback.md", s.meta, load_settings()["feedback_language"])
+    # Read can't list directories, so name the whiteboard images explicitly
+    images = sorted(str(p.relative_to(s.dir)) for p in (s.dir / "sketches").glob("*.png"))
+    if (s.dir / "canvas.png").exists():
+        images.append("canvas.png")
+    request = "Write the evaluation now."
+    if images:
+        request += "\nWhiteboard images, oldest first (canvas.png is the final board): " + ", ".join(images)
     r = subprocess.run(
-        ["claude", "-p", "Write the evaluation now.", "--output-format", "json",
+        ["claude", "-p", request, "--output-format", "json",
          "--model", s.meta["feedback_model"], "--system-prompt", prompt,
          "--tools", "Read", "--setting-sources", "", "--strict-mcp-config"],
         cwd=s.dir, capture_output=True, text=True, timeout=900)

@@ -278,6 +278,21 @@ def test_evaluate_parses_json_and_report(session, monkeypatch):
     assert (session.dir / "feedback.md").read_text() == "## Veredicto\nBien hecho."
 
 
+def test_evaluate_names_whiteboard_images(session, monkeypatch):
+    (session.dir / "sketches").mkdir()
+    for name in ("200.png", "100.png"):
+        (session.dir / "sketches" / name).write_bytes(b"png")
+    (session.dir / "canvas.png").write_bytes(b"png")
+    calls = {}
+
+    def fake_run(args, **kw):
+        calls["request"] = args[args.index("-p") + 1]
+        return types.SimpleNamespace(returncode=0, stdout=json.dumps({"result": "ok"}), stderr="")
+    monkeypatch.setattr(sessions.subprocess, "run", fake_run)
+    sessions.evaluate(session)
+    assert "sketches/100.png, sketches/200.png, canvas.png" in calls["request"]
+
+
 def test_evaluate_without_json_block_keeps_report(session, monkeypatch):
     monkeypatch.setattr(sessions.subprocess, "run", lambda args, **kw: types.SimpleNamespace(
         returncode=0, stdout=json.dumps({"result": "Just prose."}), stderr=""))
