@@ -1,0 +1,13 @@
+.git
+.venv
+.pytest_cache
+**/__pycache__
+.DS_Store
+.env
+.claude
+data
+models
+docs
+tests
+web/node_modules
+web/dist

@@ -167,6 +167,8 @@ class Interviewer:
             elif t == "result":
                 self.parser.close()
                 self.on_event("turn_end", {"value": ev.get("total_cost_usd")})
+                if ev.get("is_error"):  # e.g. "Not logged in · Please run /login"
+                    self.on_event("error", {"value": f"Claude Code: {ev.get('result') or 'request failed'}"})
                 with self.lock:
                     self.busy = False
                     if self.queue:

@@ -6,7 +6,7 @@ You talk and sketch, as you would in a system design round. The interviewer answ
 follows your diagram as it grows, digs into the weak spots and keeps you on the clock. When
 you're done, you get a written evaluation with links to the moments worth reviewing.
 
-> Runs locally on macOS and Linux (Windows through WSL). The interviewer uses your own Claude Code login, no API key needed.
+> Runs locally on macOS and Linux, or anywhere with Docker. The interviewer uses your own Claude Code login, no API key needed.
 
 ![A live system design session: the conversation on the left, the candidate's Excalidraw diagram on the right](docs/images/live.png)
 
@@ -105,7 +105,7 @@ the target company if one is set, otherwise a well-known one...
 ## Getting started
 
 **You'll need**
-- macOS or Linux. On Windows, use [WSL](https://learn.microsoft.com/windows/wsl/install).
+- macOS or Linux (on Windows, use WSL or Docker).
   Apple Silicon or an NVIDIA GPU makes transcription fastest; on a plain CPU, set
   `faster_whisper_model = "small"` in `config.toml` for snappier turns.
 - Python 3.11, Node 24 (see `.nvmrc`) and [pnpm](https://pnpm.io)
@@ -117,6 +117,26 @@ scripts/setup.sh   # local venv, Python deps, voice models (~1.9 GB in total)
 ```
 
 Open http://127.0.0.1:8765 in Chrome or Safari, allow the microphone, and start an interview.
+
+### Or with Docker
+
+Any OS with Docker works, Windows included. Speech-to-text runs on the CPU inside the container
+(about a second per turn), so on an Apple Silicon Mac the native setup above is snappier.
+
+```sh
+docker compose up -d --build                        # http://127.0.0.1:8765
+docker compose exec mocksy claude auth login        # once: open the link, paste the code back
+```
+
+Run the login in a regular terminal: it asks you to paste back the code the browser shows.
+
+The login is kept in a Docker volume, so it survives restarts and rebuilds. To use a token
+instead, export `CLAUDE_CODE_OAUTH_TOKEN` (from `claude setup-token`) or `ANTHROPIC_API_KEY`
+in your shell before `docker compose up`.
+
+The first start downloads the voice model and the first transcription the Whisper weights; both
+are kept in volumes, as are your sessions. `config.toml` is mounted read-only, so you can change
+models or voices and just `docker compose restart`.
 
 By default the interviewer runs on `sonnet` (fast enough for conversation) and the evaluation on
 `opus`. Both can be changed per session. Defaults for models, voices, evaluation language and

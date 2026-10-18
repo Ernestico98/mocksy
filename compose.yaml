@@ -1,0 +1,22 @@
+services:
+  mocksy:
+    build: .
+    image: mocksy
+    ports:
+      - "127.0.0.1:8765:8765"   # localhost only: browsers allow the microphone there without HTTPS
+    environment:                # optional alternatives to `claude auth login`, read from your shell
+      - CLAUDE_CODE_OAUTH_TOKEN
+      - ANTHROPIC_API_KEY
+    volumes:
+      - mocksy-data:/app/data                         # sessions, settings, personal packs
+      - models:/app/models                            # Kokoro voice model, fetched on first start
+      - hf-cache:/home/mocksy/.cache/huggingface      # Whisper weights, fetched on first use
+      - claude:/home/mocksy/.claude                   # Claude Code login and config
+      - ./config.toml:/app/config.toml:ro             # edit models/voices without rebuilding
+    restart: unless-stopped
+
+volumes:
+  mocksy-data:
+  models:
+  hf-cache:
+  claude:

@@ -306,6 +306,13 @@ def test_evaluate_raises_on_cli_error(session, monkeypatch):
         sessions.evaluate(session)
 
 
+def test_evaluate_reports_the_json_error_from_stdout(session, monkeypatch):
+    monkeypatch.setattr(sessions.subprocess, "run", lambda args, **kw: types.SimpleNamespace(
+        returncode=1, stdout=json.dumps({"is_error": True, "result": "Not logged in · Please run /login"}), stderr=""))
+    with pytest.raises(RuntimeError, match="Please run /login"):
+        sessions.evaluate(session)
+
+
 def test_session_reloads_from_disk(session, events):
     session.say("persist me")
     again = sessions.Session(session.dir, events.append)

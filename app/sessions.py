@@ -357,7 +357,11 @@ def evaluate(s: Session) -> dict:
          "--tools", "Read", "--setting-sources", "", "--strict-mcp-config"],
         cwd=s.dir, capture_output=True, text=True, timeout=900)
     if r.returncode != 0:
-        raise RuntimeError(r.stderr.strip()[-300:] or "claude exited with an error")
+        try:  # errors such as "Not logged in" come back as JSON on stdout
+            reason = json.loads(r.stdout).get("result")
+        except ValueError:
+            reason = None
+        raise RuntimeError(reason or r.stderr.strip()[-300:] or "claude exited with an error")
     text = json.loads(r.stdout)["result"]
     m = re.search(r"```json\s*(.*?)```", text, flags=re.S)
     data = json.loads(m.group(1)) if m else {}

@@ -13,7 +13,8 @@ feedback_language = "en"  # the evaluation is written in this language, whatever
 # (NVIDIA GPU if available, otherwise CPU).
 stt_engine = "auto"
 whisper_model = "mlx-community/whisper-large-v3-turbo"  # mlx
-faster_whisper_model = "large-v3-turbo"                 # faster-whisper; "small" is quicker on a CPU
+faster_whisper_model = "small"                         # faster-whisper: ~1 s per turn on a CPU;
+                                                        # "large-v3-turbo" with an NVIDIA GPU
 speed = 1.0
 
 [speech.voices]

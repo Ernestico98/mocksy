@@ -73,3 +73,22 @@ def test_cli_args_isolate_the_interviewer():
     assert "--bare" not in args                  # --bare would forbid subscription auth
     assert args[args.index("--resume") + 1] == "abc"
     assert args[args.index("--model") + 1] == "sonnet"
+
+
+def test_failed_turn_is_reported_as_an_error():
+    import io
+    import json
+    import threading
+    import types
+
+    from app.interviewer import Interviewer
+
+    events = []
+    it = Interviewer.__new__(Interviewer)  # no real process: feed a canned stdout
+    it.on_event, it.lock, it.busy, it.queue = lambda k, v: events.append((k, v["value"])), threading.Lock(), True, []
+    it.parser = TagStream(lambda kind, val: None)
+    result = {"type": "result", "is_error": True, "result": "Not logged in · Please run /login", "total_cost_usd": 0}
+    it.proc = types.SimpleNamespace(stdout=io.StringIO(json.dumps(result) + "\n"), returncode=None)
+    it._read()
+    assert ("error", "Claude Code: Not logged in · Please run /login") in events
+    assert events.index(("turn_end", 0)) < events.index(("error", "Claude Code: Not logged in · Please run /login"))

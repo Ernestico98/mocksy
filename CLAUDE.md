@@ -21,6 +21,11 @@ are spoken with local Kokoro TTS. At the end a second Claude call writes the eva
 ## Run / develop
 - First time: `scripts/setup.sh` (venv, Python deps, model downloads)
 - `./run.sh` builds `web/` if needed and serves http://127.0.0.1:8765 (`./run.sh --build` to force a rebuild)
+- Docker: `docker compose up -d --build` (Linux image: faster-whisper on CPU, Claude Code from the `stable`
+  channel; pin with the `CLAUDE_CODE_VERSION` build arg, and rebuild with `--no-cache` to update it). The macOS Keychain login isn't reachable from the container: log in with
+  `docker compose exec mocksy claude auth login` (kept in the `claude` volume via `CLAUDE_CONFIG_DIR`) or export
+  `CLAUDE_CODE_OAUTH_TOKEN`/`ANTHROPIC_API_KEY`. Kokoro is fetched on first start by `scripts/docker-entrypoint.sh`
+  into the `models` volume, Whisper into `hf-cache`, sessions into `mocksy-data`
 - Frontend dev with hot reload: `./run.sh` in one terminal, `cd web && pnpm dev` in another (proxies `/api` and `/files`)
 - Tests: `scripts/test.sh` (pytest + `pnpm typecheck` + vitest). Backend tests use a fake interviewer
   (`tests/conftest.py`) and an isolated `MOCKSY_DATA_DIR`; `MOCKSY_LIVE=1` adds one real Claude Code

@@ -88,7 +88,7 @@ def _segments(path, lang: str | None) -> list[dict]:
         from faster_whisper import WhisperModel
 
         # CUDA if available, otherwise CPU, with the fastest compute type for the device
-        _faster = WhisperModel(DEFAULTS["speech"].get("faster_whisper_model", "large-v3-turbo"),
+        _faster = WhisperModel(DEFAULTS["speech"].get("faster_whisper_model", "small"),
                                device="auto", compute_type="auto")
     segments, _ = _faster.transcribe(path, language=lang, condition_on_previous_text=False)
     return [{"text": s.text, "no_speech_prob": s.no_speech_prob, "avg_logprob": s.avg_logprob,
