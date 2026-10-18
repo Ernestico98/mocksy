@@ -1,45 +1,138 @@
 # Mocksy
 
-Rehearse technical interviews out loud. Mocksy gives you a voice interviewer that asks
-questions, follows your whiteboard as you draw, pushes back like a real interviewer, and
-writes a structured evaluation when you're done.
+**Practice technical interviews out loud, with an AI interviewer that listens, watches your whiteboard and pushes back.**
 
-- **Talk naturally**: hands-free voice with automatic turn-taking; interrupt the interviewer any time.
-- **Draw**: an embedded Excalidraw whiteboard. The interviewer gets a text description of
-  every change and looks at the full image when it needs to.
-- **Interview types**: product decomposition and classic system design, and easy to add your
-  own (`prompts/packs/*.md`, or `data/packs/*.md` for personal packs kept out of git).
-  Optionally tailored to a target company with quick web research, or to a problem you choose
-  ("a ride-sharing app that matches drivers in real time").
-- **Stop any time**: end with an evaluation, or just stop and evaluate later (or never).
-- **Evaluation**: verdict, rubric scores, top 3 things to practice, and links to the exact
-  moments to review. Every session is saved and can be replayed.
-- **Local voice**: speech-to-text with Whisper (MLX) and text-to-speech with Kokoro run on
-  your machine. The interviewer runs on [Claude Code](https://claude.com/claude-code).
+You talk and sketch, as you would in a system design round. The interviewer answers by voice,
+follows your diagram as it grows, digs into the weak spots and keeps you on the clock. When
+you're done, you get a written evaluation with links to the moments worth reviewing.
 
-## Requirements
-- macOS on Apple Silicon (Whisper runs on MLX)
-- Python 3.11, Node 24 LTS (`.nvmrc`; the scripts switch to it via nvm) and pnpm
-- [Claude Code](https://claude.com/claude-code) installed and logged in (`claude` on your PATH)
+> Runs locally on Apple Silicon Macs. The interviewer uses your own Claude Code login, no API key needed.
 
-## Setup
+![A live system design session: the conversation on the left, the candidate's Excalidraw diagram on the right](docs/images/live.png)
+
+## Highlights
+
+<img src="docs/images/evaluation.png" align="right" width="320" alt="The evaluation: verdict, rubric scores, top 3 things to practice and review notes">
+
+- **Voice conversation.** Hands-free turn-taking: speak, pause, and the interviewer replies out
+  loud. Cut in while it's talking and it stops, knowing exactly what you heard. Push-to-talk and
+  typing work too.
+- **It sees your whiteboard.** An embedded [Excalidraw](https://excalidraw.com) board. The
+  interviewer follows your changes as you draw, looks at the full image when it needs to, and
+  checks in if you've been sketching in silence for a while.
+- **Pushes back.** It answers clarifying questions with concrete numbers, probes trade-offs
+  ("sequential IDs are guessable: is that a problem?"), and moves you through the phases on time.
+- **An evaluation you can act on.** A verdict, a score per rubric dimension, the top 3 things to
+  practice, and review notes that jump to the exact moment in the transcript. Past sessions stay
+  in your history to re-read and re-listen.
+- **Tailored to you.** Choose the interview type, level, target company (the interviewer can do a
+  quick web search to fit the problem to it), a specific problem, or a focus such as "push me on
+  failure modes". In English or Spanish.
+
+<br clear="right">
+
+## How it works
+
+```mermaid
+flowchart LR
+  subgraph Browser
+    Mic[Microphone + VAD]
+    Board[Excalidraw]
+  end
+  subgraph Backend [FastAPI backend]
+    STT[Whisper STT]
+    Session[Session: clock, phases, whiteboard diffs]
+    TTS[Kokoro TTS]
+  end
+  CC[Claude Code process]
+
+  Mic -- your voice --> STT --> Session
+  Board -- changes --> Session
+  Session -- messages --> CC
+  CC -- reply + actions --> Session
+  Session --> TTS -- spoken reply --> Browser
+```
+
+- **Local speech.** The browser detects when you start and stop talking. The backend transcribes
+  with Whisper on Apple's MLX, filtering out Whisper's typical hallucinations on silence, and
+  speaks with Kokoro. Both run on your machine.
+- **Streaming voice.** Each session runs its own long-lived Claude Code process in stream-JSON
+  mode. Replies are parsed as they stream and spoken sentence by sentence, so the interviewer
+  starts talking before it has finished thinking. Short inline tags let it take notes, change
+  phase, stay silent or end the interview.
+- **Whiteboard as text.** Every board change becomes a diff like `+ box "Redis cache"` or
+  `+ arrow box "Redirect service" → box "Redis cache"`, which is cheap enough to send on every turn. The
+  rendered image is there when the model wants to look.
+- **Realistic interruptions.** When you cut in, the model is told which sentences you actually
+  heard, so it doesn't assume you got the rest.
+- **Sandboxed.** The interviewer process runs in the session folder with a small tool allowlist,
+  and without your Claude Code settings or MCP servers.
+- **Evaluation.** At the end, a second, deeper model reads the transcript, the interviewer's
+  notes and the whiteboard, and grades against the interview's rubric.
+
+## Interview types
+
+| Type | Phases |
+| --- | --- |
+| **System Design** (classic) | Requirements · High-level design · Deep dive · Wrap-up |
+| **Product Decomposition** | Problem framing · Wireframe · System design |
+
+Each interview type is a "pack": one Markdown file with the interviewer's brief. To add your own
+(behavioral, frontend system design…), drop a file into `prompts/packs/`. Private packs, such as
+company-specific prep, go in `data/packs/`, which stays out of git.
+
+<details>
+<summary>What a pack looks like</summary>
+
+```toml
++++
+title = "System Design (classic)"
+description = "Design a large-scale backend system: requirements, estimates, high-level design, deep dives."
+phases = [
+  { key = "requirements", label = "Requirements", minutes = 10 },
+  { key = "high_level", label = "High-level design", minutes = 15 },
+  { key = "deep_dive", label = "Deep dive", minutes = 20 },
+  { key = "wrap_up", label = "Wrap-up", minutes = 5 },
+]
+rubric = ["Requirements & scoping", "Estimation", "High-level architecture", "Data model & APIs", "Scalability & reliability", "Trade-offs & communication"]
++++
+You are a senior engineer running a classic system design interview. Pick a problem that fits
+the target company if one is set, otherwise a well-known one...
+```
+</details>
+
+## Getting started
+
+**You'll need**
+- A Mac with Apple Silicon
+- Python 3.11, Node 24 (see `.nvmrc`) and [pnpm](https://pnpm.io)
+- [Claude Code](https://claude.com/claude-code) installed and logged in (`claude` on your `PATH`)
+
 ```sh
-scripts/setup.sh   # local venv, Python deps, voice models (~1.9 GB)
+scripts/setup.sh   # local venv, Python deps, voice models (~1.9 GB in total)
 ./run.sh           # builds the web UI and serves http://127.0.0.1:8765
 ```
-Open the URL in Chrome or Safari and allow the microphone.
 
-## Configuration
-`config.toml` holds defaults: which model runs the interview (`sonnet` by default) and which
-writes the evaluation (`opus`), the evaluation language, voices and port. Models can also be
-picked per session in the app.
+Open http://127.0.0.1:8765 in Chrome or Safari, allow the microphone, and start an interview.
+
+By default the interviewer runs on `sonnet` (fast enough for conversation) and the evaluation on
+`opus`. Both can be changed per session. Defaults for models, voices, evaluation language and
+port live in `config.toml`.
 
 ## Development
+
 ```sh
-./run.sh                 # backend on :8765
-cd web && pnpm dev       # UI with hot reload on :5173
+scripts/test.sh    # pytest + typecheck + vitest
 ```
-```sh
-scripts/test.sh         # backend + frontend tests
-```
-See `CLAUDE.md` for the architecture.
+
+**Stack:** FastAPI and Python 3.11 · React 19, Vite and TypeScript · Excalidraw ·
+mlx-whisper · Kokoro (ONNX) · Claude Code CLI.
+
+Architecture notes, the interviewer's message protocol and the dev workflow are in
+[`CLAUDE.md`](CLAUDE.md).
+
+## Status
+
+A personal project, built to prepare for my own interviews. It runs on macOS with Apple Silicon
+only, and is designed for a desktop browser. Next on the list: more interview types (behavioral,
+frontend system design) and progress tracking across sessions.
