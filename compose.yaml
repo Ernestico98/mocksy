@@ -8,7 +8,7 @@ services:
       - CLAUDE_CODE_OAUTH_TOKEN
       - ANTHROPIC_API_KEY
     volumes:
-      - mocksy-data:/app/data                         # sessions, settings, personal packs
+      - ./data:/app/data                              # sessions, settings, personal packs (same folder as a native run)
       - models:/app/models                            # Kokoro voice model, fetched on first start
       - hf-cache:/home/mocksy/.cache/huggingface      # Whisper weights, fetched on first use
       - claude:/home/mocksy/.claude                   # Claude Code login and config
@@ -16,7 +16,6 @@ services:
     restart: unless-stopped
 
 volumes:
-  mocksy-data:
   models:
   hf-cache:
   claude:

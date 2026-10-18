@@ -104,10 +104,12 @@ the target company if one is set, otherwise a well-known one...
 
 ## Getting started
 
+There are two ways to run Mocksy: natively, or in Docker. Either way it serves
+http://127.0.0.1:8765. Open it in Chrome or Safari, allow the microphone, and start an interview.
+
+### Native (macOS or Linux)
+
 **You'll need**
-- macOS or Linux (on Windows, use WSL or Docker).
-  Apple Silicon or an NVIDIA GPU makes transcription fastest; on a plain CPU, set
-  `faster_whisper_model = "small"` in `config.toml` for snappier turns.
 - Python 3.11, Node 24 (see `.nvmrc`) and [pnpm](https://pnpm.io)
 - [Claude Code](https://claude.com/claude-code) installed and logged in (`claude` on your `PATH`)
 
@@ -116,31 +118,49 @@ scripts/setup.sh   # local venv, Python deps, voice models (~1.9 GB in total)
 ./run.sh           # builds the web UI and serves http://127.0.0.1:8765
 ```
 
-Open http://127.0.0.1:8765 in Chrome or Safari, allow the microphone, and start an interview.
+On Apple Silicon, speech-to-text runs on MLX and is fast with the large Whisper model. Elsewhere
+it uses faster-whisper with the `small` model (about a second per turn on a CPU); with an NVIDIA
+GPU, set `faster_whisper_model = "large-v3-turbo"` in `config.toml` for better accuracy.
 
-### Or with Docker
+### Docker (any OS, Windows included)
 
-Any OS with Docker works, Windows included. Speech-to-text runs on the CPU inside the container
-(about a second per turn), so on an Apple Silicon Mac the native setup above is snappier.
+You only need Docker. Speech-to-text runs on the CPU inside the container, so on an Apple Silicon
+Mac the native setup is snappier.
 
 ```sh
-docker compose up -d --build                        # http://127.0.0.1:8765
-docker compose exec mocksy claude auth login        # once: open the link, paste the code back
+docker compose up -d --build                    # build, start, and serve http://127.0.0.1:8765
+docker compose exec mocksy claude auth login    # once: open the link, sign in, paste the code back
 ```
 
-Run the login in a regular terminal: it asks you to paste back the code the browser shows.
+Run the login in a regular terminal, since it asks you to paste the code the browser shows. It's
+saved in a Docker volume, so it survives restarts and rebuilds. To use a token instead, export
+`CLAUDE_CODE_OAUTH_TOKEN` (from `claude setup-token`) or `ANTHROPIC_API_KEY` in your shell before
+`docker compose up`.
 
-The login is kept in a Docker volume, so it survives restarts and rebuilds. To use a token
-instead, export `CLAUDE_CODE_OAUTH_TOKEN` (from `claude setup-token`) or `ANTHROPIC_API_KEY`
-in your shell before `docker compose up`.
+The first start downloads the voice model, and the first transcription downloads Whisper; both
+are kept in Docker volumes. Sessions, settings and personal packs live in `./data`, the same
+folder a native run uses.
 
-The first start downloads the voice model and the first transcription the Whisper weights; both
-are kept in volumes, as are your sessions. `config.toml` is mounted read-only, so you can change
-models or voices and just `docker compose restart`.
+| To… | Run |
+| --- | --- |
+| See the logs | `docker compose logs -f` |
+| Stop / start | `docker compose stop` / `docker compose start` |
+| Apply `config.toml` changes | `docker compose restart` |
+| Update Mocksy | `git pull && docker compose up -d --build` |
+| Update Claude Code | `docker compose build --no-cache && docker compose up -d` |
+| Check the Claude Code login | `docker compose exec mocksy claude auth status` |
 
-By default the interviewer runs on `sonnet` (fast enough for conversation) and the evaluation on
-`opus`. Both can be changed per session. Defaults for models, voices, evaluation language and
-port live in `config.toml`.
+Claude Code comes from its `stable` release channel; pin a version with
+`docker compose build --build-arg CLAUDE_CODE_VERSION=<version>`. To use another port, change the
+first number in `ports` in `compose.yaml` (the `port` in `config.toml` only applies to native runs).
+If the interviewer says "Not logged in", run the login command above.
+
+### Configuration
+
+`config.toml` holds the defaults; changes made from the app's settings are saved to
+`data/settings.json` and take precedence. The interviewer runs on `sonnet` by default (fast enough
+for conversation) and the evaluation on `opus`; both can be changed per session. The evaluation
+language, voices and the Whisper models are set there too.
 
 ## Development
 
