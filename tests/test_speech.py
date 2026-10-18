@@ -27,6 +27,7 @@ def test_collapse_loops(text, expected):
 def fake_whisper(monkeypatch, segments):
     mod = types.SimpleNamespace(transcribe=lambda *a, **k: {"segments": segments,
                                                             "text": " ".join(s["text"] for s in segments)})
+    monkeypatch.setattr(speech, "stt_engine", lambda: "mlx")
     monkeypatch.setitem(sys.modules, "mlx_whisper", mod)
 
 
@@ -54,3 +55,34 @@ def test_transcribe_drops_silence_segments(monkeypatch):
 def test_transcribe_collapses_repetition_loops(monkeypatch):
     fake_whisper(monkeypatch, [seg(" Is that okay? " + "As in your previous version. " * 15, ratio=4.0)])
     assert speech.transcribe("x.wav", "en") == "Is that okay? As in your previous version."
+
+
+@pytest.mark.parametrize("plat,machine,expected", [
+    ("darwin", "arm64", "mlx"), ("darwin", "x86_64", "faster-whisper"), ("linux", "x86_64", "faster-whisper"),
+    ("win32", "AMD64", "faster-whisper"),
+])
+def test_stt_engine_auto_picks_by_platform(monkeypatch, plat, machine, expected):
+    monkeypatch.setitem(speech.DEFAULTS["speech"], "stt_engine", "auto")
+    monkeypatch.setattr(speech.sys, "platform", plat)
+    monkeypatch.setattr(speech.platform, "machine", lambda: machine)
+    assert speech.stt_engine() == expected
+
+
+def test_faster_whisper_segments_go_through_the_same_filters(monkeypatch):
+    calls = {}
+
+    class FakeModel:
+        def __init__(self, name, **kw):
+            calls["model"] = name
+
+        def transcribe(self, path, **kw):
+            calls["kw"] = kw
+            segs = [types.SimpleNamespace(**seg(" Shard by user id.")),
+                    types.SimpleNamespace(**seg(" you you", no_speech=0.9, logprob=-1.2))]
+            return iter(segs), None  # faster-whisper returns a lazy generator
+    monkeypatch.setattr(speech, "stt_engine", lambda: "faster-whisper")
+    monkeypatch.setattr(speech, "_faster", None)
+    monkeypatch.setitem(sys.modules, "faster_whisper", types.SimpleNamespace(WhisperModel=FakeModel))
+    assert speech.transcribe("x.wav", "es") == "Shard by user id."
+    assert calls["model"] == speech.DEFAULTS["speech"]["faster_whisper_model"]
+    assert calls["kw"]["language"] == "es"

@@ -11,7 +11,7 @@ mkdir -p models
 BASE=https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0
 [ -f models/kokoro-v1.0.onnx ] || curl -fL -o models/kokoro-v1.0.onnx "$BASE/kokoro-v1.0.onnx"
 [ -f models/voices-v1.0.bin ] || curl -fL -o models/voices-v1.0.bin "$BASE/voices-v1.0.bin"
-# Whisper weights download from Hugging Face on first use (cached in ~/.cache/huggingface).
-.venv/bin/python -c "import mlx_whisper, numpy as np; mlx_whisper.transcribe(np.zeros(16000, dtype=np.float32), path_or_hf_repo='mlx-community/whisper-large-v3-turbo')" >/dev/null
+# Whisper weights download from Hugging Face (cached in ~/.cache/huggingface).
+.venv/bin/python -c "from app import speech; speech.preload_stt()" >/dev/null
 (cd web && pnpm install --frozen-lockfile && pnpm build)
 echo "Setup done. Run ./run.sh"

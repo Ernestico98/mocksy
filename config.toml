@@ -9,7 +9,11 @@ feedback_model = "opus"   # writes the final evaluation (slower, deeper)
 feedback_language = "en"  # the evaluation is written in this language, whatever the interview language
 
 [speech]
-whisper_model = "mlx-community/whisper-large-v3-turbo"
+# Speech-to-text engine: "auto" uses mlx on Apple Silicon and faster-whisper elsewhere
+# (NVIDIA GPU if available, otherwise CPU).
+stt_engine = "auto"
+whisper_model = "mlx-community/whisper-large-v3-turbo"  # mlx
+faster_whisper_model = "large-v3-turbo"                 # faster-whisper; "small" is quicker on a CPU
 speed = 1.0
 
 [speech.voices]

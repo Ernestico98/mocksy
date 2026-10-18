@@ -9,7 +9,8 @@ are spoken with local Kokoro TTS. At the end a second Claude call writes the eva
   - `server.py` HTTP API + SSE (`/api/events`), serves `web/dist`
   - `sessions.py` session state on disk, phases/clock, canvas diffs, interrupts, TTS queue, evaluation
   - `interviewer.py` long-lived `claude -p --input-format stream-json` process + streaming tag parser
-  - `speech.py` Kokoro TTS / mlx-whisper STT with hallucination filters
+  - `speech.py` Kokoro TTS / Whisper STT with hallucination filters; STT engine is mlx-whisper on Apple Silicon,
+    faster-whisper elsewhere (`stt_engine` in `config.toml`; per-platform markers in `requirements.txt`)
   - `config.py` `config.toml` defaults + `data/settings.json` overrides, interview packs
 - `prompts/interviewer.md`, `prompts/feedback.md` system prompts (`{placeholders}` filled from session meta)
 - `prompts/packs/*.md` interview types: TOML header between `+++` (title, phases, rubric) + interviewer brief;

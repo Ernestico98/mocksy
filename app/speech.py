@@ -1,6 +1,8 @@
-"""Local speech: Kokoro (TTS) and Whisper via mlx (STT)."""
+"""Local speech: Kokoro (TTS) and Whisper (STT): mlx on Apple Silicon, faster-whisper elsewhere."""
 
+import platform
 import re
+import sys
 import threading
 
 from kokoro_onnx import Kokoro
@@ -10,6 +12,7 @@ from .config import DEFAULTS, MODELS
 KOKORO_LANG = {"en": "en-us", "es": "es"}
 
 _kokoro: Kokoro | None = None
+_faster = None
 _tts_lock = threading.Lock()
 _stt_lock = threading.Lock()
 
@@ -64,18 +67,47 @@ def _collapse_loops(text: str) -> str:
     return re.sub(r"\b((?:\w+\W+){2,8}?)(?:\1){2,}", r"\1", text, flags=re.I)
 
 
-def transcribe(path: str, lang: str) -> str:
-    import mlx_whisper
+def stt_engine() -> str:
+    engine = DEFAULTS["speech"].get("stt_engine", "auto")
+    if engine == "auto":
+        return "mlx" if sys.platform == "darwin" and platform.machine() == "arm64" else "faster-whisper"
+    return engine
+
+
+def _segments(path, lang: str | None) -> list[dict]:
+    """Whisper segments as dicts with text, no_speech_prob, avg_logprob and compression_ratio."""
+    if stt_engine() == "mlx":
+        import mlx_whisper
+
+        r = mlx_whisper.transcribe(path, path_or_hf_repo=DEFAULTS["speech"]["whisper_model"],
+                                   language=lang, condition_on_previous_text=False)
+        return r.get("segments", [])
+
+    global _faster
+    if _faster is None:
+        from faster_whisper import WhisperModel
+
+        # CUDA if available, otherwise CPU, with the fastest compute type for the device
+        _faster = WhisperModel(DEFAULTS["speech"].get("faster_whisper_model", "large-v3-turbo"),
+                               device="auto", compute_type="auto")
+    segments, _ = _faster.transcribe(path, language=lang, condition_on_previous_text=False)
+    return [{"text": s.text, "no_speech_prob": s.no_speech_prob, "avg_logprob": s.avg_logprob,
+             "compression_ratio": s.compression_ratio} for s in segments]
+
+
+def preload_stt():
+    """Downloads and loads the Whisper model (used by setup)."""
+    import numpy as np
 
     with _stt_lock:
-        r = mlx_whisper.transcribe(
-            path,
-            path_or_hf_repo=DEFAULTS["speech"]["whisper_model"],
-            language=lang,
-            condition_on_previous_text=False,
-        )
+        _segments(np.zeros(16000, dtype=np.float32), "en")
+
+
+def transcribe(path: str, lang: str) -> str:
+    with _stt_lock:
+        segments = _segments(path, lang)
     kept = []
-    for seg in r.get("segments", []):
+    for seg in segments:
         if seg.get("no_speech_prob", 0) > 0.6 and seg.get("avg_logprob", 0) < -0.7:
             continue  # probably silence
         if seg.get("compression_ratio", 0) > 2.6:

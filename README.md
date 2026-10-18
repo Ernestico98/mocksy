@@ -6,7 +6,7 @@ You talk and sketch, as you would in a system design round. The interviewer answ
 follows your diagram as it grows, digs into the weak spots and keeps you on the clock. When
 you're done, you get a written evaluation with links to the moments worth reviewing.
 
-> Runs locally on Apple Silicon Macs. The interviewer uses your own Claude Code login, no API key needed.
+> Runs locally on macOS and Linux (Windows through WSL). The interviewer uses your own Claude Code login, no API key needed.
 
 ![A live system design session: the conversation on the left, the candidate's Excalidraw diagram on the right](docs/images/live.png)
 
@@ -54,8 +54,9 @@ flowchart LR
 ```
 
 - **Local speech.** The browser detects when you start and stop talking. The backend transcribes
-  with Whisper on Apple's MLX, filtering out Whisper's typical hallucinations on silence, and
-  speaks with Kokoro. Both run on your machine.
+  with Whisper (MLX on Apple Silicon, faster-whisper elsewhere, on an NVIDIA GPU when there is
+  one), filtering out Whisper's typical hallucinations on silence, and speaks with Kokoro. Both
+  run on your machine.
 - **Streaming voice.** Each session runs its own long-lived Claude Code process in stream-JSON
   mode. Replies are parsed as they stream and spoken sentence by sentence, so the interviewer
   starts talking before it has finished thinking. Short inline tags let it take notes, change
@@ -104,7 +105,9 @@ the target company if one is set, otherwise a well-known one...
 ## Getting started
 
 **You'll need**
-- A Mac with Apple Silicon
+- macOS or Linux. On Windows, use [WSL](https://learn.microsoft.com/windows/wsl/install).
+  Apple Silicon or an NVIDIA GPU makes transcription fastest; on a plain CPU, set
+  `faster_whisper_model = "small"` in `config.toml` for snappier turns.
 - Python 3.11, Node 24 (see `.nvmrc`) and [pnpm](https://pnpm.io)
 - [Claude Code](https://claude.com/claude-code) installed and logged in (`claude` on your `PATH`)
 
@@ -126,13 +129,13 @@ scripts/test.sh    # pytest + typecheck + vitest
 ```
 
 **Stack:** FastAPI and Python 3.11 · React 19, Vite and TypeScript · Excalidraw ·
-mlx-whisper · Kokoro (ONNX) · Claude Code CLI.
+Whisper (mlx-whisper / faster-whisper) · Kokoro (ONNX) · Claude Code CLI.
 
 Architecture notes, the interviewer's message protocol and the dev workflow are in
 [`CLAUDE.md`](CLAUDE.md).
 
 ## Status
 
-A personal project, built to prepare for my own interviews. It runs on macOS with Apple Silicon
-only, and is designed for a desktop browser. Next on the list: more interview types (behavioral,
-frontend system design) and progress tracking across sessions.
+A personal project, built to prepare for my own interviews. It's developed and used on macOS with
+Apple Silicon; Linux support is newer and less tested. Designed for a desktop browser. Next on the
+list: more interview types (behavioral, frontend system design) and progress tracking across sessions.
