@@ -283,6 +283,26 @@ class Session:
         self.broadcast({"type": "meta", "meta": self.meta})
         self.status("idle")
 
+    def resume(self) -> bool:
+        """Continue a stopped (not evaluated) interview; the pause doesn't count on the clock."""
+        with self.lock:
+            if self.meta.get("status") != "ended" or (self.dir / "feedback.json").exists():
+                return False
+            paused = time.time() - self.meta.pop("ended_at", time.time())
+            self.meta["started_at"] = self.meta.get("started_at", time.time()) + paused
+            if self.meta.get("phase"):
+                self.meta["phase"]["started_at"] += paused
+            self.meta["status"] = "live"
+            self.end_requested = False
+            self.last_candidate = self.last_turn_end = time.time()
+            self.save()
+        self.broadcast({"type": "meta", "meta": self.meta})
+        self.ensure_interviewer()
+        self.status("thinking")
+        self.interviewer.send(f"[system] resume · {self.clock()}")
+        threading.Thread(target=self.watchdog, daemon=True).start()
+        return True
+
     def finish(self):
         with self.lock:
             if self.meta.get("status") != "live":

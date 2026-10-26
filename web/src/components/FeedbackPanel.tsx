@@ -19,7 +19,7 @@ export default function FeedbackPanel({ meta, feedback: f, onJump }: Props) {
   }
   if (!f) {
     return meta.status === "ended"
-      ? <div className="evaluating">This interview hasn't been evaluated. Use “Evaluate” above if you want feedback on it.</div>
+      ? <div className="evaluating">This interview hasn't been evaluated. Use “Resume” above to continue it, or “Evaluate” for feedback.</div>
       : null;
   }
   const scores = f.scores || {};

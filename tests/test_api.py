@@ -81,6 +81,24 @@ def test_stop_endpoint_ends_without_evaluation(client):
     assert data["meta"]["problem"] == "Design a chat app for 10k users"
 
 
+def test_resume_continues_a_stopped_interview_without_counting_the_pause(client):
+    sid = new(client)
+    it = FakeInterviewer.instances[-1]
+    it.on_event("session", {"value": "claude-123"})
+    client.post(f"/api/sessions/{sid}/stop")
+    before = client.get(f"/api/sessions/{sid}").json()["meta"]
+    assert client.post(f"/api/sessions/{sid}/resume").status_code == 200
+    meta = client.get(f"/api/sessions/{sid}").json()["meta"]
+    assert meta["status"] == "live" and "ended_at" not in meta
+    assert meta["started_at"] > before["started_at"]
+    resumed = FakeInterviewer.instances[-1]
+    assert resumed is not it and resumed.resume == "claude-123"
+    assert resumed.sent[-1].startswith("[system] resume · 00:0")
+    client.post(f"/api/sessions/{sid}/say", json={"text": "I'm back"})
+    assert "I'm back" in resumed.sent[-1]
+    assert client.post(f"/api/sessions/{sid}/resume").status_code == 409  # already live
+
+
 def test_new_session_stops_the_previous_live_one(client):
     new(client)
     first = FakeInterviewer.instances[-1]

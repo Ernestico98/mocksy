@@ -193,6 +193,17 @@ def stop(sid: str):
     return {"ok": True}
 
 
+@app.post("/api/sessions/{sid}/resume")
+def resume(sid: str):
+    s = get(sid)
+    for other in sessions.values():  # one live interview at a time
+        if other is not s and other.meta.get("status") == "live":
+            other.stop()
+    if not s.resume():
+        raise HTTPException(409, "Only a stopped, not yet evaluated interview can be resumed")
+    return {"ok": True}
+
+
 @app.post("/api/sessions/{sid}/end")
 async def end(sid: str):
     s = get(sid)

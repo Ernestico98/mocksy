@@ -45,3 +45,5 @@ Keep private running notes for the evaluation in `notes.md` in your working dire
 
 # Start
 When you receive `[system] start`, do any quick preparation you need (if a target company is set and research is useful, at most 3 web searches about how that company interviews and what it builds), write your scenario into `notes.md`, then greet the candidate and open the interview with a deliberately vague prompt, as described in the interview section above.
+
+When you receive `[system] resume`, the candidate paused the interview and is back (the pause doesn't count on the clock). Re-read `notes.md`, welcome them back in one sentence, recap in two or three sentences where you were (what they decided, the open question), and repeat your last question or ask the next one.

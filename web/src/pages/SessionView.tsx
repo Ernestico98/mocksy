@@ -207,10 +207,15 @@ export default function SessionView({ id, meta: app }: { id: string; meta: AppMe
   }
 
   async function stop() {
-    if (!(await ask("Stop the interview without an evaluation? You can still evaluate it later from this page.", "Stop"))) return;
+    if (!(await ask("Stop the interview without an evaluation? You can resume it or evaluate it later from this page.", "Stop"))) return;
     player.stop();
     mic.current.disable();
     await api.stop(id);
+  }
+
+  async function resume() {
+    if (feedback) return;
+    await api.resume(id);
   }
 
   async function back() {
@@ -234,7 +239,7 @@ export default function SessionView({ id, meta: app }: { id: string; meta: AppMe
   return (
     <div className="session">
       <Header
-        meta={meta} app={app} live={live} onBack={back} onEnd={end} onStop={stop} onPhase={changePhase}
+        meta={meta} app={app} live={live} onBack={back} onEnd={end} onStop={stop} onResume={resume} onPhase={changePhase}
         onEndSilence={(ms) => { mic.current.endSilenceMs = ms; store.set("endSilence", String(ms)); }}
       />
       <main className="workspace">
@@ -289,9 +294,9 @@ export default function SessionView({ id, meta: app }: { id: string; meta: AppMe
 
 // ------------------------------------------------------------------ header
 
-function Header({ meta, app, live, onBack, onEnd, onStop, onPhase, onEndSilence }: {
+function Header({ meta, app, live, onBack, onEnd, onStop, onResume, onPhase, onEndSilence }: {
   meta: SessionMeta; app: AppMeta; live: boolean;
-  onBack: () => void; onEnd: () => void; onStop: () => void; onPhase: (key: string, label: string) => void; onEndSilence: (ms: number) => void;
+  onBack: () => void; onEnd: () => void; onStop: () => void; onResume: () => void; onPhase: (key: string, label: string) => void; onEndSilence: (ms: number) => void;
 }) {
   const now = useNow(500);
   const [open, setOpen] = useState(false);
@@ -327,7 +332,8 @@ function Header({ meta, app, live, onBack, onEnd, onStop, onPhase, onEndSilence 
           {open && <VoiceSettings meta={meta} app={app} onEndSilence={onEndSilence} onClose={() => setOpen(false)} />}
         </div>
       )}
-      {live && <button className="btn" onClick={onStop} title="End without an evaluation">Stop</button>}
+      {live && <button className="btn" onClick={onStop} title="Pause: end without an evaluation, resume later">Stop</button>}
+      {meta.status === "ended" && <button className="btn" onClick={onResume} title="Continue where you stopped">Resume</button>}
       {(live || meta.status === "ended") && (
         <button className="btn danger" onClick={onEnd}>{meta.status === "ended" ? "Evaluate" : "End & evaluate"}</button>
       )}

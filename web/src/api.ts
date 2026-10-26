@@ -128,6 +128,7 @@ export const api = {
   canvas: (id: string, body: { lines: string[]; png: string | null; scene: string }) => request(`${s(id)}/canvas`, body),
   end: (id: string) => request(`${s(id)}/end`, {}),
   stop: (id: string) => request(`${s(id)}/stop`, {}),
+  resume: (id: string) => request(`${s(id)}/resume`, {}),
   async transcribe(id: string, wav: Blob): Promise<string> {
     const fd = new FormData();
     fd.append("audio", wav, "turn.wav");
