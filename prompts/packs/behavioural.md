@@ -4,6 +4,7 @@ description = "Hiring-manager style behavioural round: real stories, drilled wit
 company = ""
 default_language = "en"
 whiteboard = false
+model_answer = false      # no "Model answer" explainer: these are personal stories
 phases = [
   { key = "intro", label = "About you", minutes = 4 },
   { key = "story_one", label = "Story 1", minutes = 7 },

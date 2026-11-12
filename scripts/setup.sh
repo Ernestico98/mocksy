@@ -14,4 +14,14 @@ BASE=https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v
 # Whisper weights download from Hugging Face (cached in ~/.cache/huggingface).
 .venv/bin/python -c "from app import speech; speech.preload_stt()" >/dev/null
 (cd web && pnpm install --frozen-lockfile && pnpm build)
+# "Model answer" video renderer: playwright-core drives Chrome; without a system Chrome/Chromium,
+# download Playwright's headless Chromium (~100 MB). It also needs ffmpeg on the PATH.
+(cd app/explainer && pnpm install --frozen-lockfile)
+HAS_CHROME=
+for c in "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" /Applications/Chromium.app/Contents/MacOS/Chromium \
+    /usr/bin/google-chrome /usr/bin/chromium /usr/bin/chromium-browser; do [ -x "$c" ] && HAS_CHROME=1; done
+if [ -z "$HAS_CHROME" ]; then  # same places app/explainer/render.mjs looks
+  (cd app/explainer && pnpm exec playwright-core install --only-shell chromium)
+fi
+command -v ffmpeg >/dev/null || echo "Note: install ffmpeg to render model-answer videos (brew install ffmpeg / apt install ffmpeg)."
 echo "Setup done. Run ./run.sh"

@@ -30,6 +30,15 @@ export interface Settings {
   speed: number;
   voice_en: string;
   voice_es: string;
+  /** model answer (see config.toml [model_answer]) */
+  ma_script_model: string;
+  ma_scene_model: string;
+  ma_qa_model: string;
+  ma_budget_usd: number;
+  ma_scenes: number;
+  ma_fix_rounds: number;
+  ma_name_company: boolean;
+  ma_chrome: string;
 }
 
 export interface AppMeta {
@@ -57,6 +66,8 @@ export interface SessionMeta {
   phases: Phase[];
   rubric: string[];
   whiteboard?: boolean;
+  /** the pack allows a "Model answer" (missing in older sessions: follows `whiteboard`) */
+  model_answer?: boolean;
   model: string;
   feedback_model: string;
   effort?: string;
@@ -123,13 +134,57 @@ export interface SessionSummary {
   minutes: number;
 }
 
+export type ModelAnswerMode = "video" | "diagram";
+export type StageStatus = "pending" | "running" | "done" | "failed" | "cancelled" | "skipped";
+
+export interface ModelAnswerState {
+  mode: ModelAnswerMode;
+  status: "running" | "done" | "failed" | "cancelled";
+  error: string | null;
+  stages: Record<string, { status: StageStatus; detail?: string; progress?: number | null; started?: number; ended?: number }>;
+  labels: Record<string, string>;
+  cost_usd: number;
+  budget_usd: number;
+  runs: { stage: string; worker: string; model: string; cost_usd: number; duration_s?: number }[];
+  started_at: number;
+  ended_at: number | null;
+  script?: { title: string; description: string; words: number; scenes: number; assumptions: string[] };
+  outputs: Partial<Record<"video" | "script" | "youtube" | "diagram_svg" | "diagram_png", { url: string; name: string }>>;
+  chapters?: { t: number; title: string }[];
+  duration_s?: number;
+  /** flagged by the automatic checks: a person should look at these before publishing */
+  review?: string[];
+  qa?: { issues: { scene: string; severity: string; kind: string; issue: string }[]; summary: string; frames?: number; fixed?: number };
+}
+
+export interface Estimate {
+  usd: [number, number];
+  typical_usd: number;
+  minutes: [number, number];
+  /** estimated tokens per model (mostly cache reads) */
+  tokens: Record<string, number>;
+  budget_usd: number;
+}
+
+export interface ModelAnswerStatus {
+  state: ModelAnswerState | null;
+  /** why the video can't be rendered on this machine (null: it can) */
+  ready: string | null;
+  estimates: Record<ModelAnswerMode, Estimate>;
+  settings: Partial<Settings>;
+  /** false when the session's interview type has no model answer; `blocked` says why */
+  allowed?: boolean;
+  blocked?: string | null;
+}
+
 export type ServerEvent =
   | { type: "settings"; settings: Settings }
   | { type: "message"; session: string; message: Message }
   | { type: "audio"; session: string; message_id: number; index: number; url: string }
   | { type: "status"; session: string; state: string; detail?: string }
   | { type: "meta"; session: string; meta: SessionMeta }
-  | { type: "feedback"; session: string; feedback: Feedback | null };
+  | { type: "feedback"; session: string; feedback: Feedback | null }
+  | { type: "model_answer"; session: string; state: ModelAnswerState };
 
 /** A failed request; `errors` holds per-field validation messages (422 from the pack API). */
 export class ApiError extends Error {
@@ -186,6 +241,12 @@ export const api = {
   end: (id: string) => request(`${s(id)}/end`, {}),
   stop: (id: string) => request(`${s(id)}/stop`, {}),
   resume: (id: string) => request(`${s(id)}/resume`, {}),
+  modelAnswer: (id: string) => request<ModelAnswerStatus>(`${s(id)}/model-answer`),
+  startModelAnswer: (id: string, mode: ModelAnswerMode, fresh = false) =>
+    request<ModelAnswerStatus>(`${s(id)}/model-answer`, { mode, fresh }),
+  cancelModelAnswer: (id: string) => request<{ ok: boolean; cancelled: boolean }>(`${s(id)}/model-answer/cancel`, {}),
+  /** deletes what was generated (refused while a generation runs) */
+  deleteModelAnswer: (id: string) => request(`${s(id)}/model-answer`, undefined, "DELETE"),
   /** `timing`: when the VAD ended the turn (performance.now()) and the pause it waited, for latency stats. */
   async transcribe(id: string, wav: Blob, timing?: { vadAt: number; silenceMs: number }): Promise<string> {
     const fd = new FormData();

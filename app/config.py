@@ -29,6 +29,8 @@ EDITABLE = {
     "speed": DEFAULTS["speech"]["speed"],
     "voice_en": DEFAULTS["speech"]["voices"]["en"],
     "voice_es": DEFAULTS["speech"]["voices"]["es"],
+    # model answer (see config.toml [model_answer])
+    **{f"ma_{k}": v for k, v in DEFAULTS.get("model_answer", {}).items()},
 }
 
 

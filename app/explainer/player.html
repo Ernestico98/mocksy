@@ -1,0 +1,75 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  html, body { margin: 0; background: #0f1218; }
+  #stage { position: relative; width: 1920px; height: 1080px; overflow: hidden; background: #0f1218;
+    font-family: -apple-system, 'Helvetica Neue', Helvetica, Arial, 'Liberation Sans', 'DejaVu Sans', sans-serif; color: #e8ecf2; }
+  #stage svg { position: absolute; inset: 0; }
+  #sub { position: absolute; left: 160px; right: 160px; bottom: 34px; min-height: 96px; display: flex;
+    align-items: center; justify-content: center; text-align: center; font-size: 34px; line-height: 1.35;
+    font-weight: 500; color: #e8ecf2; text-shadow: 0 2px 6px #000; }
+</style>
+</head>
+<body>
+<div id="stage"><svg id="svg" width="1920" height="1080" viewBox="0 0 1920 1080"></svg><div id="sub"></div></div>
+<script src="lib.js"></script>
+<script src="data.js"></script>
+<script>
+  // scene files are optional while they're being written
+  for (const s of window.SCRIPT.scenes) document.write(`<script src="scenes/${s.id}.js" onerror="void 0"><\/script>`);
+</script>
+<script>
+(function () {
+  const { C, text, chip } = L;
+  // header chips: the script's phases, in order (the current scene's phase is lit)
+  const PHASES = (window.SCRIPT.phases || []).map((p) => [p.key, p.label]);
+
+  function header(sc) {
+    let s = text({ x: 80, y: 66, t: sc.title, size: 40, weight: 700 });
+    let x = 1840;
+    for (const [key, label] of PHASES.slice().reverse()) {
+      const on = sc.phase === key, w = chip.width(label, 22);
+      s += chip({ x: x - w, y: 66, t: label, color: on ? "blue" : "faint", solid: on });
+      x -= w + 14;
+    }
+    s += `<line x1="80" y1="118" x2="1840" y2="118" stroke="${C.line}" stroke-width="2"/>`;
+    return s;
+  }
+
+  // subtitle: the sentence being spoken, timed by its share of the beat's characters
+  function subtitle(beats, t) {
+    const b = beats.find((x) => t >= x.start - 0.05 && t <= x.end + 0.3);
+    if (!b) return "";
+    const parts = b.say.match(/[^.!?]+[.!?]+["']?\s*|[^.!?]+$/g) || [b.say];
+    const total = parts.reduce((a, s) => a + s.length, 0);
+    let acc = b.start;
+    for (const s of parts) {
+      const d = (b.end - b.start) * s.length / total;
+      if (t < acc + d) return s.trim();
+      acc += d;
+    }
+    return parts[parts.length - 1].trim();
+  }
+
+  window.renderAt = function (id, t) {
+    window.__lastError = null;
+    const sc = window.SCRIPT.scenes.find((s) => s.id === id);
+    const tm = window.TIMINGS[id];
+    const fn = window.SCENES[id];
+    let body;
+    try {
+      body = fn ? fn(t, tm.beats) : text({ x: 960, y: 520, t: `${id}: scene not written yet`, size: 40, anchor: "middle", color: C.muted });
+    } catch (e) {
+      body = text({ x: 960, y: 520, t: `${id} error: ${e.message}`, size: 30, anchor: "middle", color: C.red });
+      window.__lastError = e.stack || String(e);
+    }
+    document.getElementById("svg").innerHTML = header(sc) + body;
+    document.getElementById("sub").textContent = subtitle(tm.beats, t);
+    return window.__lastError;
+  };
+})();
+</script>
+</body>
+</html>
