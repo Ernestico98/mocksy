@@ -50,6 +50,7 @@ export default function ModelAnswerPanel({ meta, app }: Props) {
   }, [id]);
 
   if (!data) return <div className="evaluating">{error || "Loading…"}</div>;
+  if (data.allowed === false && !data.state) return <div className="evaluating">{data.blocked}</div>;
   const st = data.state;
 
   async function generate(mode: ModelAnswerMode, fresh = false) {

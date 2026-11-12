@@ -315,7 +315,7 @@ export default function SessionView({ id, meta: app }: { id: string; meta: AppMe
             {showFeedbackTab && (
               <button role="tab" aria-selected={tab === "feedback"} className={tab === "feedback" ? "active" : ""} onClick={() => setTab("feedback")}>Evaluation</button>
             )}
-            {feedback && !live && (meta.model_answer ?? meta.whiteboard !== false) && (
+            {feedback && !live && meta.model_answer !== false && (
               <button role="tab" aria-selected={tab === "answer"} className={tab === "answer" ? "active" : ""} onClick={() => setTab("answer")}>Model answer</button>
             )}
           </nav>

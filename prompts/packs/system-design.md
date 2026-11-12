@@ -3,6 +3,7 @@ title = "System Design (classic)"
 description = "Design a large-scale backend system: requirements, estimates, high-level design, deep dives."
 company = ""
 default_language = "en"
+model_answer = true
 phases = [
   { key = "requirements", label = "Requirements", minutes = 10 },
   { key = "high_level", label = "High-level design", minutes = 15 },

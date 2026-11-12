@@ -376,7 +376,8 @@ def live_interview() -> bool:
 @app.get("/api/sessions/{sid}/model-answer")
 def model_answer_status(sid: str):
     s = get(sid)
-    return {**model_answer.status(s.dir), "allowed": model_answer.allowed(s.meta)}
+    ok, why = model_answer.availability(s.meta)
+    return {**model_answer.status(s.dir), "allowed": ok, "blocked": why or None}
 
 
 @app.post("/api/sessions/{sid}/model-answer")
@@ -384,8 +385,9 @@ def model_answer_start(sid: str, body: ModelAnswerIn):
     s = get(sid)
     if body.mode not in model_answer.STAGES:
         raise HTTPException(422, f"mode must be one of {', '.join(model_answer.STAGES)}")
-    if not model_answer.allowed(s.meta):
-        raise HTTPException(409, "This interview type has no model answer (its pack sets model_answer = false).")
+    ok, why = model_answer.availability(s.meta)
+    if not ok:
+        raise HTTPException(409, why)
     if not (s.dir / "feedback.json").exists():
         raise HTTPException(409, "Evaluate the interview first: the model answer builds on its evaluation.")
     if live_interview():

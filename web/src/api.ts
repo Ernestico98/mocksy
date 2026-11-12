@@ -170,8 +170,9 @@ export interface ModelAnswerStatus {
   ready: string | null;
   estimates: Record<ModelAnswerMode, Estimate>;
   settings: Partial<Settings>;
-  /** false when the session's interview type has no model answer */
+  /** false when the session's interview type has no model answer; `blocked` says why */
   allowed?: boolean;
+  blocked?: string | null;
 }
 
 export type ServerEvent =
