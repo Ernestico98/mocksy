@@ -16,6 +16,9 @@ const TOOL_STATUS: Record<string, string> = {
 
 interface Server { state: string; detail: string; since: number }
 
+/** The "pause that ends your turn" setting: "auto" (adaptive) or a fixed number of ms. */
+const endSilence = (value: string) => (value === "auto" || !+value ? null : +value);
+
 function useNow(ms: number) {
   const [now, setNow] = useState(() => Date.now() / 1000);
   useEffect(() => {
@@ -122,7 +125,7 @@ export default function SessionView({ id, meta: app }: { id: string; meta: AppMe
   useEffect(() => {
     const m = mic.current;
     m.setMode(store.get("micMode", "hands-free") as MicMode);
-    m.endSilenceMs = +store.get("endSilence", "1300");
+    m.endSilenceMs = endSilence(store.get("endSilence", "auto"));
     m.isPlaybackActive = () => player.playing;
     m.onState = setMicState;
     m.onLevel = setLevel;
@@ -252,7 +255,7 @@ export default function SessionView({ id, meta: app }: { id: string; meta: AppMe
     <div className="session">
       <Header
         meta={meta} app={app} live={live} onBack={back} onEnd={end} onStop={stop} onResume={resume} onPhase={changePhase}
-        onEndSilence={(ms) => { mic.current.endSilenceMs = ms; store.set("endSilence", String(ms)); }}
+        onEndSilence={(value) => { mic.current.endSilenceMs = endSilence(value); store.set("endSilence", value); }}
         debug={debug} onDebug={(on) => { setDebug(on); store.set("latencyDebug", on ? "1" : ""); }}
       />
       <main className={`workspace${hasBoard ? "" : " solo"}`}>
@@ -310,7 +313,7 @@ export default function SessionView({ id, meta: app }: { id: string; meta: AppMe
 
 function Header({ meta, app, live, onBack, onEnd, onStop, onResume, onPhase, onEndSilence, debug, onDebug }: {
   meta: SessionMeta; app: AppMeta; live: boolean;
-  onBack: () => void; onEnd: () => void; onStop: () => void; onResume: () => void; onPhase: (key: string, label: string) => void; onEndSilence: (ms: number) => void;
+  onBack: () => void; onEnd: () => void; onStop: () => void; onResume: () => void; onPhase: (key: string, label: string) => void; onEndSilence: (value: string) => void;
   debug: boolean; onDebug: (on: boolean) => void;
 }) {
   const now = useNow(500);
@@ -357,7 +360,7 @@ function Header({ meta, app, live, onBack, onEnd, onStop, onResume, onPhase, onE
 }
 
 function VoiceSettings({ meta, app, onEndSilence, debug, onDebug, onClose }: {
-  meta: SessionMeta; app: AppMeta; onEndSilence: (ms: number) => void; debug: boolean; onDebug: (on: boolean) => void; onClose: () => void;
+  meta: SessionMeta; app: AppMeta; onEndSilence: (value: string) => void; debug: boolean; onDebug: (on: boolean) => void; onClose: () => void;
 }) {
   const key = meta.lang === "es" ? "voice_es" : "voice_en";
   const prefixes = meta.lang === "es" ? ["ef", "em"] : ["af", "am", "bf", "bm"];
@@ -381,7 +384,8 @@ function VoiceSettings({ meta, app, onEndSilence, debug, onDebug, onClose }: {
         </select>
       </label>
       <label className="field"><span>Pause that ends your turn</span>
-        <select defaultValue={store.get("endSilence", "1300")} onChange={(e) => onEndSilence(+e.target.value)}>
+        <select defaultValue={store.get("endSilence", "auto")} onChange={(e) => onEndSilence(e.target.value)}>
+          <option value="auto">Adaptive (0.8–1.8 s)</option>
           <option value="900">Short (0.9 s)</option>
           <option value="1300">Normal (1.3 s)</option>
           <option value="2000">Long (2 s)</option>

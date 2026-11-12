@@ -15,9 +15,31 @@ registerProcessor("capture", Capture);`;
 export type MicState = "off" | "listening" | "ready" | "speaking" | "muted";
 export type MicMode = "hands-free" | "ptt";
 
+/**
+ * Adaptive end of turn: how long a pause must last before the turn ends, chosen when the pause
+ * starts. A long utterance whose energy fades out (a finished sentence) ends sooner; a short one
+ * that stops abruptly (likely mid-phrase) waits longer; anything else waits `baseMs`.
+ */
+export interface EndOfTurn {
+  shortMs: number;        // after ≥ longSpeechMs of speech that fades out
+  baseMs: number;
+  longMs: number;         // after < shortSpeechMs of speech that doesn't fade out
+  longSpeechMs: number;
+  shortSpeechMs: number;
+  fadeRatio: number;      // "fades out": the last 120 ms are below this fraction of the 400 ms before
+}
+
+export const ADAPTIVE_END: EndOfTurn = {
+  shortMs: 800, baseMs: 1300, longMs: 1800, longSpeechMs: 3000, shortSpeechMs: 1000, fadeRatio: 0.6,
+};
+
+const TAIL_MS = 520, FADE_MS = 120;
+
 export class Mic {
   mode: MicMode = "hands-free";
-  endSilenceMs = 1300;
+  /** null: adaptive (see EndOfTurn); a number: a fixed pause in ms. */
+  endSilenceMs: number | null = null;
+  endOfTurn: EndOfTurn = ADAPTIVE_END;
   preRollMs = 350;
   state: MicState = "off";
   isPlaybackActive: () => boolean = () => false;
@@ -38,6 +60,8 @@ export class Mic {
   private loudMs = 0;
   private quietMs = 0;
   private speechMs = 0;
+  private endMs = 0;                                   // pause that ends the current turn
+  private tail: { rms: number; ms: number }[] = [];    // the last voiced frames before a pause
 
   constructor(opts: Partial<Pick<Mic, "mode" | "endSilenceMs" | "onLevel" | "onState" | "onSpeechStart" | "onUtterance" | "isPlaybackActive">> = {}) {
     Object.assign(this, opts);
@@ -80,6 +104,26 @@ export class Mic {
     this.mode = mode;
     this.rec = null;
     if (this.ctx) this.set(mode === "ptt" ? "ready" : "listening");
+  }
+
+  /** How long the pause that just started must last to end the turn. */
+  pauseToEndTurn(): number {
+    if (this.endSilenceMs !== null) return this.endSilenceMs;
+    const e = this.endOfTurn;
+    const fades = this.fadesOut();
+    if (this.speechMs >= e.longSpeechMs && fades) return e.shortMs;
+    if (this.speechMs < e.shortSpeechMs && !fades) return e.longMs;
+    return e.baseMs;
+  }
+
+  private fadesOut(): boolean {
+    let lastMs = 0, last = 0, beforeMs = 0, before = 0;
+    for (let i = this.tail.length - 1; i >= 0; i--) {
+      const { rms, ms } = this.tail[i];
+      if (lastMs < FADE_MS) { lastMs += ms; last += rms * ms; } else { beforeMs += ms; before += rms * ms; }
+    }
+    if (beforeMs < 200) return false;     // not enough speech to tell
+    return last / lastMs < (before / beforeMs) * this.endOfTurn.fadeRatio;
   }
 
   setMuted(muted: boolean) {
@@ -135,6 +179,7 @@ export class Mic {
           this.rec = this.pre.splice(0);
           this.speechMs = this.loudMs;
           this.quietMs = 0;
+          this.tail = [];
           this.set("speaking");
           this.onSpeechStart();
         }
@@ -146,10 +191,18 @@ export class Mic {
     }
 
     this.rec.push(f);
-    if (rms > threshold * 0.6) { this.quietMs = 0; this.speechMs += dt; }
-    else this.quietMs += dt;
+    if (rms > threshold * 0.6) {
+      this.quietMs = 0;
+      this.speechMs += dt;
+      this.tail.push({ rms, ms: dt });
+      let tailMs = this.tail.reduce((n, t) => n + t.ms, 0);
+      while (tailMs - this.tail[0].ms >= TAIL_MS) tailMs -= this.tail.shift()!.ms;
+    } else {
+      if (this.quietMs === 0) this.endMs = this.pauseToEndTurn();
+      this.quietMs += dt;
+    }
     const totalMs = (this.rec.length * f.length / this.rate) * 1000;
-    if (this.quietMs >= this.endSilenceMs || totalMs > 180000) this.finish(false);
+    if ((this.quietMs > 0 && this.quietMs >= this.endMs) || totalMs > 180000) this.finish(false);
   }
 
   private finish(manual: boolean) {

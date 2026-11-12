@@ -19,6 +19,13 @@ function feed(mic: Mic, amplitude: number, ms: number) {
   for (let t = 0; t < ms; t += frameMs) m.frame(tone(amplitude));
 }
 
+// speech whose loudness glides from one amplitude to another (a sentence fading out)
+function ramp(mic: Mic, from: number, to: number, ms: number) {
+  const m = mic as unknown as Internals;
+  const n = Math.round(ms / frameMs);
+  for (let i = 0; i < n; i++) m.frame(tone(from + ((to - from) * i) / Math.max(1, n - 1)));
+}
+
 function makeMic(opts: Partial<Mic> = {}) {
   const onUtterance = vi.fn();
   const onSpeechStart = vi.fn();
@@ -102,6 +109,80 @@ describe("Mic voice activity detection", () => {
     feed(mic, SILENT, 2000);     // pauses don't end a push-to-talk turn
     expect(onUtterance).not.toHaveBeenCalled();
     mic.stopTalking();
+    expect(onUtterance).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("Adaptive end of turn", () => {
+  it("ends a long answer that fades out after a short pause", () => {
+    const { mic, onUtterance } = makeMic();
+    feed(mic, LOUD, 3200);
+    ramp(mic, LOUD, 0.02, 160);  // the last word trails off
+    feed(mic, SILENT, 700);
+    expect(onUtterance).not.toHaveBeenCalled();
+    feed(mic, SILENT, 150);
+    expect(onUtterance).toHaveBeenCalledTimes(1);
+    const silenceMs = onUtterance.mock.calls[0][1].silenceMs;
+    expect(silenceMs).toBeGreaterThanOrEqual(800);
+    expect(silenceMs).toBeLessThan(900);
+  });
+
+  it("keeps listening when the candidate resumes after a thinking pause", () => {
+    const { mic, onUtterance } = makeMic();
+    feed(mic, LOUD, 3200);
+    ramp(mic, LOUD, 0.02, 160);
+    feed(mic, SILENT, 650);      // "...so I'd add a cache." (thinks) "And then..."
+    feed(mic, LOUD, 1500);
+    expect(onUtterance).not.toHaveBeenCalled();
+    feed(mic, SILENT, 1400);     // stopped abruptly this time: the normal pause applies
+    expect(onUtterance).toHaveBeenCalledTimes(1);
+  });
+
+  it("waits the normal pause when a long answer stops abruptly (likely mid-phrase)", () => {
+    const { mic, onUtterance } = makeMic();
+    feed(mic, LOUD, 3500);
+    feed(mic, SILENT, 1100);
+    expect(onUtterance).not.toHaveBeenCalled();
+    feed(mic, SILENT, 300);
+    expect(onUtterance).toHaveBeenCalledTimes(1);
+  });
+
+  it("gives a short, abrupt start more time", () => {
+    const { mic, onUtterance } = makeMic();
+    feed(mic, LOUD, 600);        // "So I think..."
+    feed(mic, SILENT, 1500);
+    expect(onUtterance).not.toHaveBeenCalled();
+    feed(mic, SILENT, 400);
+    expect(onUtterance).toHaveBeenCalledTimes(1);
+  });
+
+  it("a short answer that fades out waits the normal pause", () => {
+    const { mic, onUtterance } = makeMic();
+    feed(mic, LOUD, 700);
+    ramp(mic, LOUD, 0.02, 160);  // "Yes, exactly."
+    feed(mic, SILENT, 1100);
+    expect(onUtterance).not.toHaveBeenCalled();
+    feed(mic, SILENT, 300);
+    expect(onUtterance).toHaveBeenCalledTimes(1);
+  });
+
+  it("a fixed pause setting turns adaptivity off", () => {
+    const { mic, onUtterance } = makeMic({ endSilenceMs: 1300 });
+    feed(mic, LOUD, 3200);
+    ramp(mic, LOUD, 0.02, 160);
+    feed(mic, SILENT, 1100);
+    expect(onUtterance).not.toHaveBeenCalled();
+    feed(mic, SILENT, 300);
+    expect(onUtterance).toHaveBeenCalledTimes(1);
+  });
+
+  it("speech under steady background noise is not mistaken for fading out", () => {
+    const { mic, onUtterance } = makeMic();
+    feed(mic, 0.01, 2000);       // room noise: the detector adapts to it
+    feed(mic, LOUD, 3500);
+    feed(mic, 0.01, 1100);       // back to the noise floor, abruptly
+    expect(onUtterance).not.toHaveBeenCalled();
+    feed(mic, 0.01, 300);
     expect(onUtterance).toHaveBeenCalledTimes(1);
   });
 });
