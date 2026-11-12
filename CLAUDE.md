@@ -14,7 +14,8 @@ are spoken with local Kokoro TTS. At the end a second Claude call writes the eva
   - `config.py` `config.toml` defaults + `data/settings.json` overrides
   - `latency.py` per-turn timing (VAD → upload → STT → sent → first text → first chunk → TTS → playback),
     stored as `latency` on the candidate message and logged as `[latency] {json}`; the browser sends
-    `vad_at`/`silence_ms` with `/transcribe` and reports playback via `/played`
+    `vad_age_ms`/`silence_ms` with `/transcribe` and reports playback via `/played` (`wait_ms`): durations on
+    the browser's own clock, never timestamps, so remote browsers work; values outside 0–60 s are dropped
   - `packs.py` interview packs: load, parse/serialize, validate, personal-pack CRUD
 - `prompts/interviewer.md`, `prompts/feedback.md` system prompts (`{placeholders}` filled from session meta)
 - `prompts/packs/*.md` interview types: TOML header between `+++` (title, phases, rubric) + interviewer brief;

@@ -46,7 +46,7 @@ def test_session_records_latency_on_the_candidate_message(session, capsys):
     assert reply["role"] == "interviewer"
     it.on_event("turn_end", {"value": 0})
     session.tts_ready(reply["id"], 0)
-    session.played(reply["id"], 0, time.time())
+    session.played(reply["id"], 0, 40)
 
     lat = cand["latency"]
     assert lat["kind"] == "speech" and lat["silence_ms"] == 1300 and lat["reply_id"] == reply["id"]
@@ -55,7 +55,7 @@ def test_session_records_latency_on_the_candidate_message(session, capsys):
     assert lat["tools_before_speech"] == 1 and lat["first_chunk_chars"] == len("Good, who are they?")
     out = capsys.readouterr().out
     assert out.count("[latency]") == 1 and f'"message": {cand["id"]}' in out
-    session.played(reply["id"], 0, time.time())  # replaying later doesn't log again
+    session.played(reply["id"], 0, 40)  # replaying later doesn't log again
     assert "[latency]" not in capsys.readouterr().out
 
 
@@ -91,9 +91,8 @@ def test_transcribe_and_played_endpoints_feed_the_record(client, monkeypatch):
     sid = client.post("/api/sessions", json={"pack": "system-design", "lang": "en", "model": "haiku",
                                              "feedback_model": "haiku"}).json()["meta"]["id"]
     monkeypatch.setattr(server.speech, "transcribe", lambda path, lang: "Use a queue.")
-    vad = time.time() - 0.2
     client.post(f"/api/sessions/{sid}/transcribe", files={"audio": ("t.wav", b"RIFF", "audio/wav")},
-                data={"vad_at": str(vad), "silence_ms": "800"})
+                data={"vad_age_ms": "25", "silence_ms": "800"})
     client.post(f"/api/sessions/{sid}/say", json={"text": "Use a queue."})
     it = FakeInterviewer.instances[-1]
     it.reply(("speech", "Why a queue rather than direct calls?"))
@@ -101,8 +100,33 @@ def test_transcribe_and_played_endpoints_feed_the_record(client, monkeypatch):
     reply_id = s.messages[-1]["id"]
     s.tts_ready(reply_id, 0)
     assert client.post(f"/api/sessions/{sid}/played", json={"message_id": reply_id, "index": 0,
-                                                            "at": time.time()}).status_code == 200
+                                                            "wait_ms": 30}).status_code == 200
     cand = next(m for m in client.get(f"/api/sessions/{sid}").json()["messages"] if m["role"] == "candidate")
-    assert cand["latency"]["silence_ms"] == 800 and cand["latency"]["upload_ms"] >= 0
+    assert cand["latency"]["silence_ms"] == 800 and 25 <= cand["latency"]["upload_ms"] < 1000
+    assert cand["latency"]["play_ms"] == 30
     assert cand["latency"]["total_to"] == "played"
     assert sessions.tts_queue.qsize() >= 1
+
+
+def test_nonsense_browser_timings_are_never_stored(client, monkeypatch):
+    sid = client.post("/api/sessions", json={"pack": "system-design", "lang": "en", "model": "haiku",
+                                             "feedback_model": "haiku"}).json()["meta"]["id"]
+    monkeypatch.setattr(server.speech, "transcribe", lambda path, lang: "Use a queue.")
+    client.post(f"/api/sessions/{sid}/transcribe", files={"audio": ("t.wav", b"RIFF", "audio/wav")},
+                data={"vad_age_ms": "1e12", "silence_ms": "-5"})
+    client.post(f"/api/sessions/{sid}/say", json={"text": "Use a queue."})
+    FakeInterviewer.instances[-1].reply(("speech", "Why a queue rather than direct calls?"))
+    s = server.sessions[sid]
+    s.tts_ready(s.messages[-1]["id"], 0)
+    client.post(f"/api/sessions/{sid}/played", json={"message_id": s.messages[-1]["id"], "wait_ms": -3e9})
+    lat = next(m for m in s.messages if m["role"] == "candidate")["latency"]
+    assert "silence_ms" not in lat and "upload_ms" not in lat
+    assert all(0 <= v <= 60000 for k, v in lat.items() if k.endswith("_ms"))
+    assert lat["total_to"] == "played"   # falls back to the server's own clock
+
+
+def test_summary_drops_out_of_range_stages():
+    t = Turn("speech", {"vad": 1.0, "received": 2_000_000_000.0}, silence_ms=1e15)
+    t.mark("stt_done", 2_000_000_000.5)
+    s = t.summary()
+    assert s == {"kind": "speech", "stt_ms": 500}

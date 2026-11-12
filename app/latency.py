@@ -7,11 +7,15 @@ matches on one machine) and turns them into a stage breakdown in milliseconds:
         ─chunk→ first_chunk ─tts→ tts_ready ─play→ played
 
 `silence_ms` is the pause the browser waited before deciding the turn was over, so what the
-candidate perceives is silence_ms + total_ms. Typed turns start at `received`.
+candidate perceives is silence_ms + total_ms. Typed turns start at `received`. Browser-side
+intervals arrive as durations on the browser's own clock, never as timestamps, so a remote
+browser's clock skew can't distort them; anything outside 0–60 s is dropped as nonsense.
 """
 
 import json
 import time
+
+MAX_MS = 60_000
 
 STAGES = [
     ("upload", "vad", "received"),          # browser → server (includes encoding the WAV)
@@ -43,16 +47,18 @@ class Turn:
 
     def summary(self) -> dict:
         out: dict = {"kind": self.kind}
-        if self.silence_ms is not None:
+        if self.silence_ms is not None and 0 <= self.silence_ms <= MAX_MS:
             out["silence_ms"] = round(self.silence_ms)
         for name, a, b in STAGES:
             if a == "stt_done" and a not in self.marks:
                 a = "received"
             if a in self.marks and b in self.marks:
-                out[f"{name}_ms"] = round((self.marks[b] - self.marks[a]) * 1000)
+                ms = round((self.marks[b] - self.marks[a]) * 1000)
+                if 0 <= ms <= MAX_MS:
+                    out[f"{name}_ms"] = ms
         start = self.marks.get("vad") or self.marks.get("received")
         end = self.marks.get("played") or self.marks.get("tts_ready")
-        if start and end:
+        if start and end and 0 <= (end - start) * 1000 <= MAX_MS:
             out["total_ms"] = round((end - start) * 1000)
             out["total_to"] = "played" if "played" in self.marks else "tts_ready"
         if self.reply_id is not None:

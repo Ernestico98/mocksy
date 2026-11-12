@@ -244,9 +244,10 @@ def look(sid: str, body: SayIn):
 
 
 @app.post("/api/sessions/{sid}/transcribe")
-async def transcribe(sid: str, audio: UploadFile = File(...), vad_at: float | None = Form(None),
+async def transcribe(sid: str, audio: UploadFile = File(...), vad_age_ms: float | None = Form(None),
                      silence_ms: float | None = Form(None)):
-    """`vad_at` (epoch seconds) and `silence_ms` come from the browser's VAD, for latency stats."""
+    """For latency stats, the browser sends how long ago its VAD ended the turn (`vad_age_ms`, measured
+    on its own clock, so a remote browser's clock doesn't matter) and the pause it waited."""
     received = time.time()
     s = get(sid)
     suffix = Path(audio.filename or "a.wav").suffix or ".wav"
@@ -257,7 +258,9 @@ async def transcribe(sid: str, audio: UploadFile = File(...), vad_at: float | No
     finally:
         Path(f.name).unlink(missing_ok=True)
     if text:
-        s.record_stt(text, {"vad": vad_at, "received": received, "stt_done": time.time()}, silence_ms)
+        vad = received - vad_age_ms / 1000 if vad_age_ms is not None and 0 <= vad_age_ms <= 60000 else None
+        ok_silence = silence_ms if silence_ms is not None and 0 <= silence_ms <= 60000 else None
+        s.record_stt(text, {"vad": vad, "received": received, "stt_done": time.time()}, ok_silence)
     return {"text": text}
 
 
@@ -307,12 +310,12 @@ def interrupt(sid: str, body: InterruptIn):
 class PlayedIn(BaseModel):
     message_id: int
     index: int = 0
-    at: float | None = None  # epoch seconds, when playback started in the browser
+    wait_ms: float | None = None  # browser clock: from the clip's "audio" event to playback starting
 
 
 @app.post("/api/sessions/{sid}/played")
 def played(sid: str, body: PlayedIn):
-    get(sid).played(body.message_id, body.index, body.at)
+    get(sid).played(body.message_id, body.index, body.wait_ms)
     return {"ok": True}
 
 
