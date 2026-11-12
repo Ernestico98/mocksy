@@ -170,7 +170,10 @@ def main():
             print(f"  first chunk: “{reply['chunks'][0]}”"
                   + (f"  ({lat['tools_before_speech']} tool call(s) before speaking)"
                      if lat.get("tools_before_speech") else ""))
-        time.sleep(1)  # let the TTS of the rest of the reply finish, as a human would listen
+        # the candidate listens to the whole reply before answering: let its audio finish synthesising
+        deadline = time.time() + 60
+        while reply and len(reply.get("audio", {})) < len(reply["chunks"]) and time.time() < deadline:
+            time.sleep(0.05)
 
     keys = ["stt_ms", "handoff_ms", "model_ms", "chunk_ms", "tts_ms", "total_ms"]
     print(f"\nMedian over {len(rows)} turns ({args.model}, effort {args.effort}, {args.lang}, pause {args.silence_ms} ms not included):")
