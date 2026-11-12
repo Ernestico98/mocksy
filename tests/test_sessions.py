@@ -89,6 +89,13 @@ def test_dead_process_is_resumed_on_next_message(session):
     assert "hello again" in new.sent[-1]
 
 
+def test_process_exit_shows_the_cli_error(session, events):
+    interviewer(session).on_event("exit", {"value": 1, "error": "Claude Code: error: unknown option '--x'"})
+    status = [e for e in events if e.get("type") == "status"][-1]
+    assert status["state"] == "error" and "unknown option '--x'" in status["detail"]
+    assert "will resume with your next message" in status["detail"]
+
+
 # ---------------------------------------------------------------- candidate turns
 
 def test_say_sends_header_with_clock(session):

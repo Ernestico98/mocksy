@@ -194,7 +194,8 @@ class Session:
                 self.status("error", val)
             elif kind == "exit":
                 if self.meta.get("status") == "live" and not self.end_requested:
-                    self.status("error", "The interviewer stopped; it will resume with your next message.")
+                    reason = f"{data['error']} · " if data.get("error") else ""
+                    self.status("error", f"{reason}The interviewer stopped; it will resume with your next message.")
 
     def _current(self) -> dict:
         if not self.current:
@@ -277,12 +278,14 @@ class Session:
                 t.mark("tts_ready")
                 self._publish_latency()
 
-    def played(self, message_id: int, index: int, at: float | None):
-        """The browser started playing a clip: closes the latency record of the turn it answers."""
+    def played(self, message_id: int, index: int, wait_ms: float | None):
+        """The browser started playing a clip `wait_ms` after it was announced (its own clock):
+        closes the latency record of the turn it answers."""
         with self.lock:
             t = self.turn
             if t and index == 0 and t.reply_id == message_id and not t.has("played"):
-                t.mark("played", at if at and abs(at - time.time()) < 60 else None)
+                ok = wait_ms is not None and 0 <= wait_ms <= 60000 and t.has("tts_ready")
+                t.mark("played", t.marks["tts_ready"] + wait_ms / 1000 if ok else None)
                 self._publish_latency(log=True)
 
     # ---------------------------------------------------------------- canvas

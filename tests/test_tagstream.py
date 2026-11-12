@@ -148,7 +148,7 @@ def test_failed_turn_is_reported_as_an_error():
     it.on_event, it.lock, it.busy, it.queue = lambda k, v: events.append((k, v["value"])), threading.Lock(), True, []
     it.parser = TagStream(lambda kind, val: None)
     result = {"type": "result", "is_error": True, "result": "Not logged in · Please run /login", "total_cost_usd": 0}
-    it.proc = types.SimpleNamespace(stdout=io.StringIO(json.dumps(result) + "\n"), returncode=None)
+    it.proc = types.SimpleNamespace(stdout=io.StringIO(json.dumps(result) + "\n"), returncode=None, wait=lambda: 0)
     it._read()
     assert ("error", "Claude Code: Not logged in · Please run /login") in events
     assert events.index(("turn_end", 0)) < events.index(("error", "Claude Code: Not logged in · Please run /login"))
@@ -160,3 +160,72 @@ def test_effort_is_passed_only_when_set():
     args = claude_args("haiku", "P", effort="low")
     assert args[args.index("--effort") + 1] == "low"
     assert "--effort" not in claude_args("haiku", "P", effort="--dangerous")  # only known levels
+
+
+class FakeProc:
+    """A Claude Code process that prints canned stdout/stderr and exits."""
+
+    def __init__(self, args, stdout="", stderr="", code=0):
+        import io
+        self.args = args
+        self.stdout, self.stderr = io.StringIO(stdout), io.StringIO(stderr)
+        self.stdin = io.StringIO()
+        self.code = code
+
+    def wait(self):
+        return self.code
+
+    def poll(self):
+        return self.code
+
+
+def spawn_with(monkeypatch, *procs):
+    from app import interviewer
+    made = []
+
+    def popen(args, **kw):
+        made.append(procs[len(made)](args))
+        return made[-1]
+    monkeypatch.setattr(interviewer.subprocess, "Popen", popen)
+    return made
+
+
+def collect(it_events, kind, timeout=3.0):
+    import time
+    end = time.time() + timeout
+    while time.time() < end:
+        if any(k == kind for k, _ in it_events):
+            return True
+        time.sleep(0.01)
+    return False
+
+
+def test_cli_error_on_stderr_reaches_the_session(monkeypatch):
+    from app.interviewer import Interviewer
+    spawn_with(monkeypatch, lambda a: FakeProc(a, stderr="error: Not logged in\n", code=1))
+    events = []
+    Interviewer("/tmp", "sonnet", "P", None, lambda k, d: events.append((k, d)))
+    assert collect(events, "exit")
+    exit_data = next(d for k, d in events if k == "exit")
+    assert exit_data["error"] == "Claude Code: error: Not logged in"
+
+
+def test_older_cli_without_effort_is_retried_without_it(monkeypatch, capsys):
+    import json
+
+    from app.interviewer import Interviewer
+    ok = json.dumps({"type": "result", "total_cost_usd": 0.001}) + "\n"
+    made = spawn_with(monkeypatch,
+                      lambda a: FakeProc(a, stderr="error: unknown option '--effort'\n", code=1),
+                      lambda a: FakeProc(a, stdout=ok))
+    events = []
+    it = Interviewer("/tmp", "haiku", "P", None, lambda k, d: events.append((k, d)), effort="low")
+    it.send("[system] start")    # before or after the first process died: either way it's (re)sent
+    import time
+    end = time.time() + 3
+    while time.time() < end and not (len(made) == 2 and "[system] start" in made[1].stdin.getvalue()):
+        time.sleep(0.01)
+    assert "--effort" in made[0].args and "--effort" not in made[1].args
+    assert "[system] start" in made[1].stdin.getvalue()
+    assert "doesn't support --effort" in capsys.readouterr().out
+    assert not any(k == "exit" and d.get("error") for k, d in events)

@@ -144,6 +144,10 @@ class TagStream:
 class Interviewer:
     """One Claude Code process per live session. Thread-safe `send`."""
 
+    effort: str | None = None
+    stopped = False
+    inflight: str | None = None   # the message being answered, resent if the process is respawned
+
     def __init__(self, cwd, model: str, system_prompt: str, resume: str | None,
                  on_event: Callable[[str, dict], None], effort: str | None = None):
         self.on_event = on_event
@@ -151,15 +155,21 @@ class Interviewer:
         self.busy = False
         self.queue: list[str] = []
         self.session_id = resume
+        self.cwd, self.model, self.system_prompt, self.effort = cwd, model, system_prompt, effort
+        self.parser: TagStream | None = None
+        self.got_text = False
+        self._spawn()
+
+    def _spawn(self):
+        self.stderr_tail: list[str] = []
         self.proc = subprocess.Popen(
-            claude_args(model, system_prompt, resume, effort), cwd=cwd,
+            claude_args(self.model, self.system_prompt, self.session_id, self.effort), cwd=self.cwd,
             stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
             text=True, bufsize=1,
         )
-        self.parser: TagStream | None = None
-        self.got_text = False
-        threading.Thread(target=self._read, daemon=True).start()
-        threading.Thread(target=self._drain_stderr, daemon=True).start()
+        self.stderr_thread = threading.Thread(target=self._drain_stderr, args=(self.proc,), daemon=True)
+        self.stderr_thread.start()
+        threading.Thread(target=self._read, args=(self.proc,), daemon=True).start()
 
     # ---------------------------------------------------------- input
     def send(self, text: str):
@@ -171,6 +181,7 @@ class Interviewer:
 
     def _write(self, text: str):
         self.busy = True
+        self.inflight = text
         self.got_text = False
         self.parser = TagStream(lambda kind, val: self.on_event(kind, {"value": val}))
         self.on_event("turn_start", {})
@@ -187,12 +198,14 @@ class Interviewer:
         return self.proc.poll() is None
 
     def stop(self):
+        self.stopped = True
         if self.alive:
             self.proc.terminate()
 
     # ---------------------------------------------------------- output
-    def _read(self):
-        for line in self.proc.stdout:
+    def _read(self, proc=None):
+        proc = proc or self.proc
+        for line in proc.stdout:
             try:
                 ev = json.loads(line)
             except ValueError:
@@ -213,18 +226,37 @@ class Interviewer:
                 elif e.get("type") == "message_stop":
                     self.parser.close()  # a tool call may follow; speech so far is complete
             elif t == "result":
-                self.parser.close()
+                if self.parser:
+                    self.parser.close()
                 self.on_event("turn_end", {"value": ev.get("total_cost_usd")})
                 if ev.get("is_error"):  # e.g. "Not logged in · Please run /login"
                     self.on_event("error", {"value": f"Claude Code: {ev.get('result') or 'request failed'}"})
                 with self.lock:
                     self.busy = False
+                    self.inflight = None
                     if self.queue:
                         text, self.queue = "\n\n".join(self.queue), []
                         self._write(text)
-        self.on_event("exit", {"value": self.proc.returncode})
+        code = proc.wait()
+        if getattr(self, "stderr_thread", None):
+            self.stderr_thread.join(2)
+        error = "\n".join(getattr(self, "stderr_tail", [])).strip()
+        if code and not self.stopped:
+            if self.effort and "effort" in error.lower():
+                # an older Claude Code without --effort: run without it rather than not at all
+                print(f"[claude] warning: this Claude Code doesn't support --effort ({error}); running without it")
+                self.effort = None
+                with self.lock:
+                    self._spawn()
+                    if self.inflight:
+                        self._write(self.inflight)
+                return
+        # e.g. "error: unknown option": the session shows the CLI's own message, not just "stopped"
+        reason = f"Claude Code: {error.splitlines()[-1][:300]}" if code and error and not self.stopped else None
+        self.on_event("exit", {"value": code, "error": reason})
 
-    def _drain_stderr(self):
-        for line in self.proc.stderr:
+    def _drain_stderr(self, proc):
+        for line in proc.stderr:
             if line.strip():
                 print("[claude]", line.rstrip())
+                self.stderr_tail = (self.stderr_tail + [line.rstrip()])[-5:]
