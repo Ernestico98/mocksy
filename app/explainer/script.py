@@ -130,70 +130,93 @@ def validate_diagram(d) -> list[str]:
 # ------------------------------------------------------------------ neutrality
 
 # The video is published as a stand-alone tutorial: it must never refer to the person who practised,
-# the practice itself or how it went. Technical uses of the same words are allowed explicitly.
-# (pattern, why, technical words allowed right before it, technical words allowed right after it)
-TECH_SESSION_BEFORE = {"user", "http", "login", "sticky", "browser", "web", "chat", "client", "streaming", "checkout",
-                       "tcp", "tls", "ssh", "db", "database", "per", "authenticated", "active", "anonymous", "user's"}
-TECH_SESSION_AFTER = r"(token|store|cookie|id|state|affinity|key|data|storage|timeout|management|layer|cache|table|replay|ticket|service|expir\w*)s?"
-TECH_SCORE_BEFORE = {"relevance", "ranking", "similarity", "risk", "credit", "trust", "quality", "confidence", "anomaly",
-                     "fraud", "match", "spam", "health", "popularity", "reputation", "priority", "z", "f1", "bm25", "engagement"}
-FEEDBACK_BEFORE = {"user", "customer", "client", "player", "listener", "reader", "viewer", "rider", "driver", "seller",
-                   "buyer", "explicit", "implicit", "haptic", "visual", "instant", "immediate"}
+# the practice itself or how it went. The rules match phrases and contexts (interview or practice
+# words, second person about what someone did, verdict language), not bare words, so technical uses
+# ("a Raft candidate", "session token", "relevance score", "user feedback", "mock the payment API",
+# "forgot password", "missed heartbeat") stay allowed.
 
-FORBIDDEN = [
-    (r"\bcandidates?\b|\binterviewees?\b|\binterviewers?\b", "refers to a candidate or an interviewer", None, None),
-    (r"\b(this|that|the|your|our|today'?s|last|previous|mock|practice) interviews?\b", "refers to a specific interview", None, None),
-    (r"\bmock(s|ed)?\b", "mentions a mock", None, r"(server|object|service|data|api|implementation)s?"),
-    (r"\bsessions?\b", "mentions a session (non-technical use)", TECH_SESSION_BEFORE, TECH_SESSION_AFTER),
-    (r"\bmistakes?\b|\bmissed\b|\bforgot(ten)?\b|\boverlooked\b", "talks about mistakes or omissions", None, None),
-    (r"\bverdicts?\b|\bhire[sd]?\b|\bhiring\b|\bno[- ]hire\b|\bpass(ed)? the (round|interview)\b",
-     "mentions a verdict or hiring", None, None),
-    (r"\bscor(e[sd]?|ing)\b", "mentions a score", TECH_SCORE_BEFORE, r"(function|threshold|model)s?"),
-    (r"\bfeedback\b", "mentions feedback (non-technical use)", FEEDBACK_BEFORE, r"loops?"),
-    (r"\byou (said|say|didn'?t|did not|missed|forgot|mentioned|chose|drew|proposed|suggested|skipped|"
-     r"should have|could have|got|were asked|answered|struggled)\b", "speaks to the candidate about what they did", None, None),
-    (r"\byour (answer|whiteboard|diagram|sketch|interview|mistakes?|scores?|performance|attempt|solution was)\b",
-     "speaks to the candidate about their attempt", None, None),
+# A sentence with one of these is technical: "candidate" there is a Raft node, a key, a search result...
+TECH_CANDIDATE = re.compile(
+    r"\b(raft|leader|election|vote[sd]?|votes|term|nodes?|follower|quorum|keys?|index|generation|replicas?|"
+    r"servers?|search|ranking|ranker|retrieval|matches|match|query|queries|recommendations?|items?|solutions?|"
+    r"líder|elección|votos?|nodos?|claves?|réplicas?|servidor(es)?)\b", re.I)
+
+YOU_DID = (r"went|talked|mentioned|said|chose|drew|proposed|suggested|skipped|missed|forgot|jumped|focused|"
+           r"spent|answered|struggled|explained|described|covered|ignored|overlooked|glossed|handled|did")
+
+FORBIDDEN: list[tuple[str, str]] = [
+    # interview / practice context
+    (r"\binterview(s|er|ers|ee|ees|ing)?\b(?! (schedul\w*|booking|slots?|platform|calendar)s?\b)",
+     "mentions an interview"),
+    (r"\b(mock|practice|training|coaching) (round|interview|session|exam|run)s?\b", "mentions a practice round"),
+    (r"\b(this|that|today'?s|our|your|the last|last|previous) (mock|practice|round)\b(?! (server|object|service|data|api|"
+     r"implementation|endpoint|client)s?\b)", "mentions a practice round"),
+    (r"\b(this|that|today'?s|our|your|last|previous) sessions?\b(?! (token|store|cookie|id|state|affinity|key|data|storage|"
+     r"timeout|layer|cache|table|replay|ticket|service|expir\w*)s?\b)", "mentions the session"),
+    (r"\brecap of (the|this|your) (round|session|answer)\b", "recaps a practice round"),
+    # people being assessed
+    (r"\binterviewees?\b|\bcandidat(e|es|o|os|a|as)\b", "refers to a candidate"),  # filtered by TECH_CANDIDATE below
+    # second person about what someone did ("you said", "earlier you talked about", "you never mentioned")
+    (r"(?<!\bif )(?<!\bwhen )(?<!\bonce )(?<!\bas )\byou (just |really |also |then |first |quickly |already )?(" + YOU_DID
+     + r")\b", "speaks to someone about what they did"),
+    (r"\byou (didn'?t|did not|never|forgot to|failed to) (mention|say|ask|explain|consider|discuss|cover|talk|address|get)\w*\b",
+     "speaks to someone about what they did"),
+    (r"\b(earlier|before|here|there|then|at first),? you (" + YOU_DID + r"|were|had)\b", "speaks to someone about what they did"),
+    (r"\byour (answer|whiteboard|diagram|sketch|interview|mistakes?|scores?|performance|attempt|approach was|design was|"
+     r"solution was)\b", "speaks to someone about their attempt"),
+    # mistakes, verdicts, scores, feedback about a person
+    (r"\bmistakes?\b", "talks about mistakes"),
+    (r"\bverdicts?\b|\b(strong|lean|weak)[- ](yes|no|hire|no[- ]hire)\b|\bno[- ]hire\b|\b(hire|hiring) (decision|signal|bar|"
+     r"committee|recommendation)s?\b|\b(pass(ed)?|fail(ed)?|ace[sd]?) the (round|interview|loop|onsite)\b", "mentions a verdict"),
+    (r"\bscored (a |an )?\d|\bscore of \d( out of \d+|/\d+)\b|\brubric\b|\byour scores?\b", "mentions a score"),
+    (r"\b(your|my|the interviewer'?s|this|that|interview) feedback\b|\bthe feedback (said|says|was|is|noted|mentioned)\b",
+     "mentions feedback on an attempt"),
     # Spanish
-    (r"\bcandidat[oa]s?\b|\bentrevistad[oa]s?\b|\bentrevistador(a|es)?\b", "refers to a candidate or an interviewer (es)", None, None),
-    (r"\bsimulacros?\b|\bveredictos?\b|\bcontrataci[oó]n\b|\bpuntuaci[oó]n\b|\bolvidaste\b|\bolvid[oó]\b|"
-     r"\bdijiste\b|\bno hiciste\b|\btus errores\b|\btu respuesta\b|\btu diagrama\b",
-     "refers to the practice or the candidate (es)", None, None),
+    (r"\bentrevist(a|as|ador|adora|adores|ado|ada|ados|adas)\b", "mentions an interview (es)"),
+    (r"\bsimulacros?\b|\bveredictos?\b|\btu (puntuación|nota|respuesta|diagrama|intento)\b|\bdecisión de contratación\b",
+     "refers to the practice or a verdict (es)"),
+    (r"\b(no )?(mencionaste|dijiste|olvidaste|elegiste|dibujaste|propusiste|saltaste|hablaste|explicaste|hiciste)\b|"
+     r"\bte (faltó|olvidaste|saltaste)\b|\bfuiste directo\b", "speaks to someone about what they did (es)"),
+    (r"\b(un |los |el )?errores? comunes?\b|\berror común\b|\btus errores\b", "talks about mistakes (es)"),
 ]
 
-
-def _technical(text: str, m: re.Match, before: set | None, after: str | None) -> bool:
-    prev = re.findall(r"[\w'-]+", text[:m.start()])
-    if before and prev and prev[-1].lower() in before:
-        return True
-    return bool(after and re.match(r"[\s-]+" + after + r"\b", text[m.end():], flags=re.I))
+# Exact on-screen labels that only make sense in a practice context
+BARE_LABELS = re.compile(r"^\s*(mock|practice|practice round|mock round|verdict|recap|feedback|score)\s*[.:!]?\s*$", re.I)
 
 
-def _company_terms(company: str) -> list[str]:
-    company = (company or "").strip()
-    if len(company) < 2 or company.lower() in {"none", "generic"}:
-        return []
-    joined = re.sub(r"\W+", "", company)
-    return list({company, joined} if len(joined) >= 3 else {company})
+def _company_pattern(company: str) -> re.Pattern | None:
+    core = re.sub(r"[^0-9a-z]", "", (company or "").lower())
+    if len(core) < 3 or core in {"none", "generic"}:
+        return None
+    # "AcmeCorp", "Acme Corp", "acme-corp", "Acme.Corp" all match
+    return re.compile(r"(?<![0-9a-z])" + r"[\s\-_.·']*".join(re.escape(c) for c in core) + r"(?![0-9a-z])", re.I)
 
 
 def check_text(text: str, company: str = "") -> list[str]:
     out = []
-    for pattern, why, before, after in FORBIDDEN:
-        m = next((m for m in re.finditer(pattern, text, flags=re.I) if not _technical(text, m, before, after)), None)
-        if m:
+    for pattern, why in FORBIDDEN:
+        for m in re.finditer(pattern, text, flags=re.I):
+            if why == "refers to a candidate" and not m.group(0).lower().startswith("interviewee"):
+                sentence = re.split(r"(?<=[.!?])\s+", text[max(0, m.start() - 300):m.end() + 300])
+                around = next((x for x in sentence if m.group(0) in x), text)
+                if TECH_CANDIDATE.search(around):
+                    continue
             out.append(f'"{m.group(0)}" ({why})')
-    for term in _company_terms(company):
-        m = re.search(r"(?<!\w)" + re.escape(term) + r"(?!\w)", text, flags=re.I)
-        if m:
-            out.append(f'"{m.group(0)}" (names the target company)')
             break
+    if BARE_LABELS.match(text):
+        out.append(f'"{text.strip()}" (practice-context label)')
+    pat = _company_pattern(company)
+    if pat and (m := pat.search(text)):
+        out.append(f'"{m.group(0)}" (names the target company)')
     return out
 
 
 def script_texts(script: dict) -> list[tuple[str, str]]:
     """Every piece of script.json that ends up in the video, the write-up or the YouTube text."""
     out = [("title", script.get("title", "")), ("description", script.get("description", ""))]
+    for i, p in enumerate(script.get("phases", []) or []):
+        if isinstance(p, dict):
+            out.append((f"phases[{i}].label", p.get("label", "")))
     for i, a in enumerate(script.get("assumptions", []) or []):
         out.append((f"assumptions[{i}]", a))
     for s in script.get("scenes", []) or []:
@@ -224,7 +247,7 @@ def scene_literals(source: str) -> list[str]:
     out = []
     for m in STRING_LITERAL.finditer(source):
         s = next(g for g in m.groups() if g is not None)
-        if re.search(r"[A-Za-zÀ-ÿ]{3,}\s+[A-Za-zÀ-ÿ]", s) and "<" not in s:  # words, not markup or colours
+        if re.search(r"[A-Za-zÀ-ÿ]{3,}", s) and "<" not in s and not re.fullmatch(r"#?[0-9a-fA-F]{3,8}", s):
             out.append(s)
     return out
 
@@ -293,24 +316,42 @@ def _border_point(cx, cy, tx, ty, pad=4):
     return cx + dx * k, cy + dy * k
 
 
-def _hits_box(p0, p1, boxes) -> bool:
-    for i in range(1, 20):
-        x = p0[0] + (p1[0] - p0[0]) * i / 20
-        y = p0[1] + (p1[1] - p0[1]) * i / 20
-        if any(abs(x - bx) < BOX_W / 2 + 6 and abs(y - by) < BOX_H / 2 + 6 for bx, by in boxes):
+def _point(path, u):
+    (sx, sy), q, (tx, ty) = path
+    if q is None:
+        return sx + (tx - sx) * u, sy + (ty - sy) * u
+    qx, qy = q
+    return ((1 - u) ** 2 * sx + 2 * (1 - u) * u * qx + u * u * tx, (1 - u) ** 2 * sy + 2 * (1 - u) * u * qy + u * u * ty)
+
+
+def _rect_hits(x, y, w, h, rects, pad=6):
+    return any(x < rx + rw + pad and rx - pad < x + w and y < ry + rh + pad and ry - pad < y + h for rx, ry, rw, rh in rects)
+
+
+def _path_hits(path, boxes) -> bool:
+    for i in range(1, 40):
+        x, y = _point(path, i / 40)
+        if _rect_hits(x, y, 0, 0, boxes, pad=8):
             return True
     return False
 
 
 def diagram_svg(d: dict) -> str:
     """Renders the script's structured diagram (nodes on a grid, labelled arrows) in the video's style.
-    Empty rows and columns are dropped; an edge that would cross another box bends around it."""
+    Empty rows and columns are dropped, gaps widen to fit edge labels, an edge that would cross a box bends
+    around it, and labels go where they cover neither a box nor another label."""
     nodes = d["nodes"]
+    edges = [e for e in d.get("edges", []) if isinstance(e, dict)]
     cols = sorted({n["col"] for n in nodes})
     rows = sorted({n["row"] for n in nodes})
-    w, h = MARGIN * 2 + len(cols) * CELL_W, TOP + MARGIN + len(rows) * CELL_H
-    pos = {n["id"]: (MARGIN + cols.index(n["col"]) * CELL_W + CELL_W / 2, TOP + rows.index(n["row"]) * CELL_H + CELL_H / 2)
+    label_w = lambda t: max(len(x) for x in _wrap(t, 18)[:2]) * 9 + 20  # noqa: E731
+    longest = max([label_w(e["label"]) for e in edges if e.get("label")] or [0])
+    cell_w = BOX_W + max(200, longest + 60)
+    cell_h = BOX_H + 130
+    w, h = MARGIN * 2 + len(cols) * cell_w, TOP + MARGIN + len(rows) * cell_h
+    pos = {n["id"]: (MARGIN + cols.index(n["col"]) * cell_w + cell_w / 2, TOP + rows.index(n["row"]) * cell_h + cell_h / 2)
            for n in nodes}
+    boxes = {k: (x - BOX_W / 2, y - BOX_H / 2, BOX_W, BOX_H) for k, (x, y) in pos.items()}
     e = html.escape
     P = PALETTE
     out = [f'<svg xmlns="http://www.w3.org/2000/svg" width="{w}" height="{h}" viewBox="0 0 {w} {h}" font-family="{e(FONT)}">',
@@ -320,42 +361,7 @@ def diagram_svg(d: dict) -> str:
            f'<rect width="{w}" height="{h}" fill="{P["bg"]}"/>',
            f'<text x="{MARGIN}" y="{MARGIN + 6}" font-size="34" font-weight="700" fill="{P["ink"]}">{e(d["title"])}</text>',
            f'<line x1="{MARGIN}" y1="{MARGIN + 30}" x2="{w - MARGIN}" y2="{MARGIN + 30}" stroke="{P["line"]}" stroke-width="2"/>']
-    labels = []
-    for n_edge, ed in enumerate(d.get("edges", [])):
-        if ed["from"] not in pos or ed["to"] not in pos or ed["from"] == ed["to"]:
-            continue
-        a, b = pos[ed["from"]], pos[ed["to"]]
-        others = [p for k, p in pos.items() if k not in (ed["from"], ed["to"])]
-        c = ed.get("color") if ed.get("color") in P else "muted"
-        style = f' stroke="{P[c]}" stroke-width="2.5" fill="none" marker-end="url(#a-{c})"'
-        style += f' marker-start="url(#a-{c})"' if ed.get("both") else ""
-        style += ' stroke-dasharray="9 7"' if ed.get("dashed") else ""
-        if _hits_box(a, b, others):  # bend around whatever is in the way
-            mx, my = (a[0] + b[0]) / 2, (a[1] + b[1]) / 2
-            length = math.hypot(b[0] - a[0], b[1] - a[1])
-            side = -1 if n_edge % 2 == 0 else 1
-            qx = mx + side * (b[1] - a[1]) / length * CELL_H * 0.75
-            qy = my - side * (b[0] - a[0]) / length * CELL_H * 0.75
-            sx, sy = _border_point(*a, qx, qy)
-            tx, ty = _border_point(*b, qx, qy)
-            out.append(f'<path d="M{sx:.1f},{sy:.1f} Q{qx:.1f},{qy:.1f} {tx:.1f},{ty:.1f}"{style}/>')
-            lx, ly = 0.25 * sx + 0.5 * qx + 0.25 * tx, 0.25 * sy + 0.5 * qy + 0.25 * ty
-        else:
-            sx, sy = _border_point(*a, *b)
-            tx, ty = _border_point(*b, *a)
-            out.append(f'<line x1="{sx:.1f}" y1="{sy:.1f}" x2="{tx:.1f}" y2="{ty:.1f}"{style}/>')
-            lx, ly = (sx + tx) / 2, (sy + ty) / 2
-        if ed.get("label"):
-            lines = _wrap(ed["label"], 18)[:2]
-            lw = max(len(t) for t in lines) * 9 + 16
-            lh = 22 * len(lines) + 6
-            if abs(ty - sy) < abs(tx - sx) * 0.3:  # mostly horizontal: sit above the line
-                ly -= lh / 2 + 6
-            labels.append(f'<rect x="{lx - lw / 2:.1f}" y="{ly - lh / 2:.1f}" width="{lw:.1f}" height="{lh}" rx="6" fill="{P["bg"]}" opacity="0.92"/>')
-            for i, t in enumerate(lines):
-                labels.append(f'<text x="{lx:.1f}" y="{ly - lh / 2 + 20 + i * 22:.1f}" font-size="16" font-weight="600" '
-                              f'fill="{P[c]}" text-anchor="middle">{e(t)}</text>')
-    for n in nodes:
+    for n in nodes:  # boxes first: edges and labels are drawn above them
         cx, cy = pos[n["id"]]
         c = P.get(n.get("color") or "blue", P["blue"])
         x, y = cx - BOX_W / 2, cy - BOX_H / 2
@@ -369,5 +375,57 @@ def diagram_svg(d: dict) -> str:
         for t, size, weight, color in lines:
             yy += size * 1.25
             out.append(f'<text x="{cx}" y="{yy - size * 0.3:.1f}" font-size="{size}" font-weight="{weight}" fill="{color}" text-anchor="middle">{e(t)}</text>')
+
+    taken: list[tuple] = list(boxes.values())
+    labels = []
+    for n_edge, ed in enumerate(edges):
+        if ed.get("from") not in pos or ed.get("to") not in pos or ed["from"] == ed["to"]:
+            continue
+        a, b = pos[ed["from"]], pos[ed["to"]]
+        others = [r for k, r in boxes.items() if k not in (ed["from"], ed["to"])]
+        path = (_border_point(*a, *b), None, _border_point(*b, *a))
+        if _path_hits(path, others):  # bend around whatever is in the way: try both sides, growing
+            length = math.hypot(b[0] - a[0], b[1] - a[1])
+            mx, my = (a[0] + b[0]) / 2, (a[1] + b[1]) / 2
+            for k in (0.55, 0.8, 1.1, 1.45, 1.9):
+                for side in ((-1, 1) if n_edge % 2 == 0 else (1, -1)):
+                    q = (mx + side * (b[1] - a[1]) / length * cell_h * k, my - side * (b[0] - a[0]) / length * cell_h * k)
+                    cand = (_border_point(*a, *q), q, _border_point(*b, *q))
+                    if not _path_hits(cand, others):
+                        path = cand
+                        break
+                else:
+                    continue
+                break
+        c = ed.get("color") if ed.get("color") in P else "muted"
+        style = f' stroke="{P[c]}" stroke-width="2.5" fill="none" marker-end="url(#a-{c})"'
+        style += f' marker-start="url(#a-{c})"' if ed.get("both") else ""
+        style += ' stroke-dasharray="9 7"' if ed.get("dashed") else ""
+        (sx, sy), q, (tx, ty) = path
+        if q is None:
+            out.append(f'<line x1="{sx:.1f}" y1="{sy:.1f}" x2="{tx:.1f}" y2="{ty:.1f}"{style}/>')
+        else:
+            out.append(f'<path d="M{sx:.1f},{sy:.1f} Q{q[0]:.1f},{q[1]:.1f} {tx:.1f},{ty:.1f}"{style}/>')
+        if ed.get("label"):
+            lines = _wrap(ed["label"], 18)[:2]
+            lw, lh = label_w(ed["label"]), 22 * len(lines) + 8
+            spots = [(u, off) for u in (0.5, 0.4, 0.6, 0.3, 0.7) for off in (0, -(lh / 2 + 8), lh / 2 + 8)]
+            best = None
+            for u, off in spots:
+                x, y = _point(path, u)
+                rect = (x - lw / 2, y + off - lh / 2, lw, lh)
+                if not _rect_hits(*rect, taken, pad=4):
+                    best = rect
+                    break
+            if best is None:
+                x, y = _point(path, 0.5)
+                best = (x - lw / 2, y - lh / 2, lw, lh)
+            taken.append(best)
+            x, y, _, _ = best
+            labels.append(f'<rect x="{x:.1f}" y="{y:.1f}" width="{lw:.1f}" height="{lh}" rx="6" fill="{P["bg"]}" '
+                          f'stroke="{P["line"]}" stroke-width="1"/>')
+            for i, t in enumerate(lines):
+                labels.append(f'<text x="{x + lw / 2:.1f}" y="{y + 21 + i * 22:.1f}" font-size="16" font-weight="600" '
+                              f'fill="{P[c]}" text-anchor="middle">{e(t)}</text>')
     out += labels + ["</svg>"]
     return "\n".join(out)
