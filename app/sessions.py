@@ -15,10 +15,9 @@ from typing import Callable
 import soundfile as sf
 
 from . import speech
-from .config import PROMPTS, SESSIONS, get_pack, load_settings
+from .config import LANGUAGES, PROMPTS, SESSIONS, load_settings
 from .interviewer import Interviewer
-
-LANGUAGES = {"en": "English", "es": "Spanish"}
+from .packs import get_pack
 
 # How long the candidate must draw without talking before the interviewer may chime in.
 SILENT_DRAWING_S = 25
@@ -85,6 +84,10 @@ class Session:
     @property
     def lang(self) -> str:
         return self.meta["lang"]
+
+    @property
+    def whiteboard(self) -> bool:
+        return self.meta.get("whiteboard", True) is not False
 
     # ---------------------------------------------------------------- clock
     def clock(self) -> str:
@@ -195,6 +198,8 @@ class Session:
         self.interviewer.send("\n\n".join(parts))
 
     def ask_to_look(self, text: str):
+        if not self.whiteboard:
+            return self.say(text, "typed")
         self.add("candidate", "look", text or "(asks you to look at the whiteboard)")
         self.last_candidate = time.time()
         parts = self.pending + self._canvas_diff(force=True)
@@ -219,6 +224,8 @@ class Session:
 
     # ---------------------------------------------------------------- canvas
     def update_canvas(self, lines: list[str], png: str | None, scene: str | None):
+        if not self.whiteboard:
+            return
         if png:
             (self.dir / "canvas.png").write_bytes(base64.b64decode(png.split(",", 1)[-1]))
         if scene:
@@ -228,6 +235,8 @@ class Session:
             self.last_canvas_change = time.time()
 
     def _canvas_diff(self, force: bool = False) -> list[str]:
+        if not self.whiteboard:
+            return []
         cur = Counter(self.canvas_lines)
         added, removed = cur - self.canvas_sent, self.canvas_sent - cur
         if not added and not removed and not force:
@@ -251,7 +260,7 @@ class Session:
 
     def maybe_prompt_silent_drawing(self, now: float) -> bool:
         it = self.interviewer
-        if not it or it.busy or self.candidate_speaking:
+        if not self.whiteboard or not it or it.busy or self.candidate_speaking:
             return False
         if Counter(self.canvas_lines) == self.canvas_sent:
             return False  # nothing new on the board
@@ -337,8 +346,26 @@ class SafeDict(dict):
         return "{" + key + "}"
 
 
+def conditional(text: str, flags: dict[str, bool]) -> str:
+    """Keeps `<!-- if NAME -->...<!-- end -->` blocks when the flag is on (`if not NAME`: when off)."""
+    def keep(m: re.Match) -> str:
+        return m.group(3) if bool(flags.get(m.group(2))) != bool(m.group(1)) else ""
+    text = re.sub(r"<!-- if (not )?(\w+) -->\n?(.*?)<!-- end -->\n?", keep, text, flags=re.S)
+    return re.sub(r"\n{3,}", "\n\n", text)
+
+
+def pack_snapshot(meta: dict) -> dict:
+    """The pack as it was when the session started (older sessions: the current file)."""
+    if "pack_body" in meta:
+        return {"body": meta["pack_body"], "rubric": meta.get("rubric", [])}
+    try:
+        return get_pack(meta["pack"])
+    except KeyError:  # deleted since, and the session predates snapshots
+        return {"body": f"(The {meta.get('pack_title', meta['pack'])} interview.)", "rubric": []}
+
+
 def render(template: Path, meta: dict, lang: str | None = None) -> str:
-    pack = get_pack(meta["pack"])
+    pack = pack_snapshot(meta)
     phases = ", ".join(f"{p['label']} ({p['key']}, {p['minutes']} min)" for p in meta["phases"])
     values = SafeDict(
         pack=pack["body"], company=meta.get("company") or "none (generic)",
@@ -348,7 +375,8 @@ def render(template: Path, meta: dict, lang: str | None = None) -> str:
         phases=phases, phase_keys=", ".join(p["key"] for p in meta["phases"]),
         language_name=LANGUAGES.get(lang or meta["lang"], lang or meta["lang"]),
     )
-    return template.read_text().format_map(values)
+    text = conditional(template.read_text(), {"whiteboard": meta.get("whiteboard", True) is not False})
+    return text.format_map(values)
 
 
 def transcript_markdown(s: Session) -> str:
@@ -366,7 +394,9 @@ def evaluate(s: Session) -> dict:
     prompt = render(PROMPTS / "feedback.md", s.meta, load_settings()["feedback_language"])
     # Read can't list directories, so name the whiteboard images explicitly
     images = sorted(str(p.relative_to(s.dir)) for p in (s.dir / "sketches").glob("*.png"))
-    if (s.dir / "canvas.png").exists():
+    if not s.whiteboard:
+        images = []
+    elif (s.dir / "canvas.png").exists():
         images.append("canvas.png")
     request = "Write the evaluation now."
     if images:
@@ -405,7 +435,8 @@ def create_session(pack_id: str, company: str, level: str, focus: str, lang: str
         "id": path.name, "created": time.time(), "status": "setup",
         "pack": pack_id, "pack_title": pack["title"], "company": company or pack.get("company", ""),
         "level": level, "focus": focus, "problem": problem, "lang": lang, "phases": pack["phases"],
-        "rubric": pack.get("rubric", []),
+        "rubric": pack.get("rubric", []), "whiteboard": pack.get("whiteboard", True) is not False,
+        "pack_body": pack["body"],  # later edits to the pack don't change a running interview
         "model": model or settings["model"], "feedback_model": feedback_model or settings["feedback_model"],
     }
     (path / "meta.json").write_text(json.dumps(meta, indent=2, ensure_ascii=False))

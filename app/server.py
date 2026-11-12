@@ -6,14 +6,16 @@ import tempfile
 from contextlib import asynccontextmanager
 from pathlib import Path
 
+from typing import Any
+
 from fastapi import FastAPI, File, HTTPException, UploadFile
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import speech
-from .config import ROOT, SESSIONS, load_packs, load_settings, save_settings
-from .sessions import LANGUAGES, Session, create_session
+from . import packs, speech
+from .config import LANGUAGES, ROOT, SESSIONS, load_settings, save_settings
+from .sessions import Session, create_session
 
 listeners: set[asyncio.Queue] = set()
 loop: asyncio.AbstractEventLoop | None = None
@@ -28,6 +30,11 @@ async def lifespan(_app):
 
 
 app = FastAPI(lifespan=lifespan)
+
+
+@app.exception_handler(packs.PackError)
+def pack_error(_request, e: packs.PackError):
+    return JSONResponse({"detail": "Invalid interview type", "errors": e.errors}, status_code=422)
 
 
 def broadcast(event: dict):
@@ -49,9 +56,10 @@ def get(sid: str) -> Session:
 
 @app.get("/api/meta")
 def meta():
-    packs = [{k: p[k] for k in ("id", "title", "description", "company", "default_language", "phases")}
-             for p in load_packs()]
-    return {"packs": packs, "languages": LANGUAGES, "voices": speech.voices(),
+    listed = [{k: p.get(k, "") for k in ("id", "title", "description", "company", "default_language",
+                                          "phases", "whiteboard", "builtin")}
+              for p in packs.load_packs()]
+    return {"packs": listed, "languages": LANGUAGES, "voices": speech.voices(),
             "settings": load_settings(),
             "models": ["haiku", "sonnet", "opus", "fable"]}
 
@@ -69,6 +77,92 @@ def settings(body: SettingsIn):
     s = save_settings(body.model_dump())
     broadcast({"type": "settings", "settings": s})
     return s
+
+
+# ------------------------------------------------------------------ interview packs
+
+class PackIn(BaseModel):
+    id: str
+    title: str = ""
+    description: str = ""
+    company: str = ""
+    default_language: str = "en"
+    whiteboard: bool = True
+    phases: list[dict[str, Any]] = []
+    rubric: list[str] = []
+    body: str = ""
+    extra: dict[str, Any] = {}  # header fields the editor doesn't know about, kept as they are
+
+
+class RawIn(BaseModel):
+    raw: str
+
+
+def pack_out(p: dict) -> dict:
+    known = {k: p.get(k, "") for k in ("id", "title", "description", "company", "default_language", "body")}
+    return known | {
+        "builtin": p.get("builtin", False), "whiteboard": p.get("whiteboard", True) is not False,
+        "phases": p.get("phases", []), "rubric": p.get("rubric", []),
+        "extra": {k: v for k, v in p.items() if k not in packs.FIELDS and k not in ("id", "body", "builtin")},
+    }
+
+
+def pack_in(body: PackIn) -> dict:
+    d = body.model_dump()
+    return d.pop("extra") | d
+
+
+def find_pack(pid: str) -> dict:
+    try:
+        return packs.get_pack(pid)
+    except KeyError:
+        raise HTTPException(404, "interview type not found") from None
+
+
+def editable(pid: str):
+    find_pack(pid)
+    if packs.is_builtin(pid):
+        raise HTTPException(403, "Built-in interview types are read-only: duplicate it instead")
+
+
+@app.get("/api/packs")
+def list_packs():
+    return [pack_out(p) for p in packs.load_packs()]
+
+
+@app.get("/api/packs/{pid}")
+def read_pack(pid: str):
+    return pack_out(find_pack(pid))
+
+
+@app.post("/api/packs")
+def create_pack(body: PackIn):
+    return pack_out(packs.save_pack(pack_in(body)))
+
+
+@app.put("/api/packs/{pid}")
+def update_pack(pid: str, body: PackIn):
+    editable(pid)
+    return pack_out(packs.save_pack(pack_in(body), old_id=pid))
+
+
+@app.delete("/api/packs/{pid}")
+def delete_pack(pid: str):
+    editable(pid)
+    packs.delete_pack(pid)
+    return {"ok": True}
+
+
+@app.post("/api/pack-markdown")
+def pack_markdown(body: PackIn):
+    """Form → raw markdown, for the editor's raw mode (not validated: it may be a draft)."""
+    return {"raw": packs.serialize(pack_in(body))}
+
+
+@app.post("/api/pack-markdown/parse")
+def parse_pack_markdown(body: RawIn):
+    """Raw markdown → form fields."""
+    return pack_out(packs.parse(body.raw))
 
 
 # ------------------------------------------------------------------ sessions
@@ -97,6 +191,7 @@ class NewSession(BaseModel):
 
 @app.post("/api/sessions")
 def new_session(body: NewSession):
+    find_pack(body.pack)
     for s in sessions.values():  # one live interview at a time
         if s.meta.get("status") == "live" and s.interviewer:
             s.interviewer.stop()
