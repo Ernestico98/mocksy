@@ -30,5 +30,23 @@ describe("Replies held while the candidate talks", () => {
     expect(h.drop(played)).toEqual([{ message_id: 5, heard_index: 1 }, { message_id: 7, heard_index: -1 }]);
     expect(h.size).toBe(0);
     expect(h.release()).toEqual([]);
+    expect(h.isDropped(clip(5, 4))).toBe(true);            // a late clip of a dropped reply
+    expect(h.isDropped(clip(8, 0))).toBe(false);
+  });
+
+  it("a barge-in drops that reply's held and future clips", () => {
+    const h = new HeldReplies();
+    h.hold(clip(5, 2));
+    h.hold(clip(6, 0));
+    h.dropReply(5);
+    expect(h.isDropped(clip(5, 3))).toBe(true);
+    expect(h.release().map((c) => c.message_id)).toEqual([6]);
+  });
+
+  it("clearing (the interview stops) forgets held clips without playing them", () => {
+    const h = new HeldReplies();
+    h.hold(clip(5, 0));
+    h.clear();
+    expect(h.release()).toEqual([]);
   });
 });

@@ -4,7 +4,7 @@ import { useConfirm } from "../components/Confirm";
 import FeedbackPanel from "../components/FeedbackPanel";
 import Transcript from "../components/Transcript";
 import Whiteboard, { type WhiteboardHandle } from "../components/Whiteboard";
-import { Mic, type MicMode, type MicState } from "../lib/audio";
+import { ADAPTIVE_END, ADAPTIVE_FAST_END, Mic, type MicMode, type MicState } from "../lib/audio";
 import { HeldReplies } from "../lib/hold";
 import { player, type Clip } from "../lib/player";
 import { fmt, go, store, voiceName } from "../lib/util";
@@ -17,8 +17,12 @@ const TOOL_STATUS: Record<string, string> = {
 
 interface Server { state: string; detail: string; since: number }
 
-/** The "pause that ends your turn" setting: "auto" (adaptive) or a fixed number of ms. */
-const endSilence = (value: string) => (value === "auto" || !+value ? null : +value);
+/** The "pause that ends your turn" setting: "auto" (adaptive, never under 1.3 s), "fast"
+ * (adaptive, 1 s after a finished-sounding answer) or a fixed number of ms. */
+function setEndSilence(m: Mic, value: string) {
+  m.endSilenceMs = +value > 0 ? +value : null;
+  m.endOfTurn = value === "fast" ? ADAPTIVE_FAST_END : ADAPTIVE_END;
+}
 
 function useNow(ms: number) {
   const [now, setNow] = useState(() => Date.now() / 1000);
@@ -57,11 +61,11 @@ export default function SessionView({ id, meta: app }: { id: string; meta: AppMe
   const held = useRef(new HeldReplies());
   const played = useRef(new Map<number, number>());
   const announced = useRef(new Map<number, number>());   // when each reply's first clip was announced
-  const transcribingRef = useRef(false);
+  const inFlight = useRef(0);     // transcriptions in flight (they can overlap)
   const playHeld = useCallback(() => {
     for (const clip of held.current.release()) {
       const m = messagesRef.current.find((x) => x.id === clip.message_id);
-      if (metaRef.current?.status === "live" && !m?.interrupted) player.enqueue(clip);
+      if (metaRef.current?.status === "live" && !m?.interrupted && !held.current.isDropped(clip)) player.enqueue(clip);
     }
   }, []);
 
@@ -101,10 +105,11 @@ export default function SessionView({ id, meta: app }: { id: string; meta: AppMe
           if (m) upsert({ ...m, audio: { ...(m.audio || {}), [ev.index]: ev.url } });
           if (metaRef.current?.status !== "live" || m?.interrupted) break;
           const clip: Clip = { message_id: ev.message_id, index: ev.index, url: ev.url };
+          if (held.current.isDropped(clip)) break;   // dropped as unheard; the server just hasn't said so yet
           if (ev.index === 0) announced.current.set(ev.message_id, performance.now());
           // the candidate is talking (or their words are being transcribed): hold the reply until
           // we know whether that was a real turn (then it's dropped) or just noise (then it plays)
-          if (held.current.shouldHold(clip, mic.current.state === "speaking" || transcribingRef.current)) held.current.hold(clip);
+          if (held.current.shouldHold(clip, mic.current.state === "speaking" || inFlight.current > 0)) held.current.hold(clip);
           else player.enqueue(clip);
           break;
         }
@@ -118,6 +123,7 @@ export default function SessionView({ id, meta: app }: { id: string; meta: AppMe
         case "meta":
           setMeta((prev) => {
             if (prev?.status === "live" && ev.meta.status !== "live") {
+              held.current.clear();
               mic.current.disable();
               if (ev.meta.status === "evaluating") setTab("feedback");
             }
@@ -133,6 +139,7 @@ export default function SessionView({ id, meta: app }: { id: string; meta: AppMe
     return () => {
       off();
       player.stop();
+      held.current.clear();
       mic.current.disable();
     };
   }, [id, upsert]);
@@ -142,33 +149,38 @@ export default function SessionView({ id, meta: app }: { id: string; meta: AppMe
   useEffect(() => {
     const m = mic.current;
     m.setMode(store.get("micMode", "hands-free") as MicMode);
-    m.endSilenceMs = endSilence(store.get("endSilence", "auto"));
-    m.isPlaybackActive = () => player.playing;
+    setEndSilence(m, store.get("endSilence", "auto"));
+    m.isPlaybackActive = () => player.playing && !player.paused;
     m.onState = setMicState;
     m.onLevel = setLevel;
     m.onSpeechStart = () => {
       setNotice("");
-      const clip = player.current;
-      if (clip) {   // barge-in: stop talking and tell the interviewer what was heard
-        player.stop();
-        void api.interrupt(id, clip.message_id, clip.index).catch(() => {});
-      }
+      player.pause();  // maybe a barge-in: pause until we know it's a real turn, not a cough
       void api.activity(id, true).catch(() => {});
     };
-    m.onDiscard = () => {     // too short to be a turn (a cough, a click): play what was held
+    m.onDiscard = () => {     // too short to be a turn (a cough, a click): carry on talking
       void api.activity(id, false).catch(() => {});
+      player.unpause();
       playHeld();
     };
     m.onUtterance = async (wav, { silenceMs }) => {
       const vadAt = performance.now();
+      const clip = player.paused ? player.current : null;
+      if (clip) {   // barge-in: stop talking and tell the interviewer what was heard
+        player.stop();
+        held.current.dropReply(clip.message_id);
+        void api.interrupt(id, clip.message_id, clip.index).catch(() => {});
+      }
       void api.activity(id, false).catch(() => {});
       setTranscribing(true);
-      transcribingRef.current = true;
+      inFlight.current++;
+      let counted = true;
+      const done = () => { if (counted) { counted = false; inFlight.current--; } };
       // the interviewer gets the latest drawing with what you said: export it while Whisper runs
       const synced = board.current?.sync().catch(() => {});
       try {
         const text = await api.transcribe(id, wav, { vadAt, silenceMs });
-        transcribingRef.current = false;
+        done();
         if (!text) { setNotice("Didn't catch that — please say it again."); playHeld(); return; }
         // a real turn: replies that arrived meanwhile went unheard; tell the interviewer before it reads this
         await Promise.all(held.current.drop(played.current).map((d) =>
@@ -179,8 +191,8 @@ export default function SessionView({ id, meta: app }: { id: string; meta: AppMe
         setNotice("Transcription failed: " + (e as Error).message);
         playHeld();
       } finally {
-        transcribingRef.current = false;
-        setTranscribing(false);
+        done();
+        setTranscribing(inFlight.current > 0);
       }
     };
     // first clip of a reply starts playing: closes that turn's latency record
@@ -247,6 +259,7 @@ export default function SessionView({ id, meta: app }: { id: string; meta: AppMe
   async function end() {
     if (live && !(await ask("End the interview and write the evaluation?", "End & evaluate"))) return;
     player.stop();
+    held.current.clear();
     mic.current.disable();
     await api.end(id);
   }
@@ -254,6 +267,7 @@ export default function SessionView({ id, meta: app }: { id: string; meta: AppMe
   async function stop() {
     if (!(await ask("Stop the interview without an evaluation? You can resume it or evaluate it later from this page.", "Stop"))) return;
     player.stop();
+    held.current.clear();
     mic.current.disable();
     await api.stop(id);
   }
@@ -285,7 +299,7 @@ export default function SessionView({ id, meta: app }: { id: string; meta: AppMe
     <div className="session">
       <Header
         meta={meta} app={app} live={live} onBack={back} onEnd={end} onStop={stop} onResume={resume} onPhase={changePhase}
-        onEndSilence={(value) => { mic.current.endSilenceMs = endSilence(value); store.set("endSilence", value); }}
+        onEndSilence={(value) => { setEndSilence(mic.current, value); store.set("endSilence", value); }}
         debug={debug} onDebug={(on) => { setDebug(on); store.set("latencyDebug", on ? "1" : ""); }}
       />
       <main className={`workspace${hasBoard ? "" : " solo"}`}>
@@ -394,6 +408,7 @@ function VoiceSettings({ meta, app, onEndSilence, debug, onDebug, onClose }: {
 }) {
   const key = meta.lang === "es" ? "voice_es" : "voice_en";
   const prefixes = meta.lang === "es" ? ["ef", "em"] : ["af", "am", "bf", "bm"];
+  const [endValue, setEndValue] = useState(() => store.get("endSilence", "auto"));
   const ref = useRef<HTMLDivElement>(null);
   useEffect(() => {
     const onDoc = (e: MouseEvent) => { if (!ref.current?.parentElement?.contains(e.target as Node)) onClose(); };
@@ -414,13 +429,15 @@ function VoiceSettings({ meta, app, onEndSilence, debug, onDebug, onClose }: {
         </select>
       </label>
       <label className="field"><span>Pause that ends your turn</span>
-        <select defaultValue={store.get("endSilence", "auto")} onChange={(e) => onEndSilence(e.target.value)}>
-          <option value="auto">Adaptive (1–1.8 s)</option>
+        <select value={endValue} onChange={(e) => { setEndValue(e.target.value); onEndSilence(e.target.value); }}>
+          <option value="auto">Adaptive (1.3–1.8 s)</option>
+          <option value="fast">Adaptive, faster (1–1.8 s)</option>
           <option value="900">Short (0.9 s)</option>
           <option value="1300">Normal (1.3 s)</option>
           <option value="2000">Long (2 s)</option>
           <option value="3000">Very long (3 s)</option>
         </select>
+        {endValue === "fast" && <p className="hint small muted">Replies sooner, but may cut you off during a long thinking pause.</p>}
       </label>
       <label className="toggle field">
         <input type="checkbox" checked={debug} onChange={(e) => onDebug(e.target.checked)} />

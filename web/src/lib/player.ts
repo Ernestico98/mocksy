@@ -29,6 +29,19 @@ class Player {
 
   get playing() { return !!this.current; }
 
+  /** Paused because the candidate may be barging in; `unpause` if it was only a noise. */
+  paused = false;
+
+  pause() {
+    if (this.audio && !this.paused) { this.paused = true; this.audio.pause(); }
+  }
+
+  unpause() {
+    if (!this.paused) return;
+    this.paused = false;
+    void this.audio?.play().catch(() => {});
+  }
+
   subscribe(fn: Listener) {
     this.listeners.add(fn);
     return () => { this.listeners.delete(fn); };
@@ -53,6 +66,7 @@ class Player {
     this.queue.forEach((q) => q.audio.removeAttribute("src"));
     this.queue = [];
     this.blocked = null;
+    this.paused = false;
     const a = this.audio;
     this.audio = null;
     this.current = null;
@@ -73,6 +87,7 @@ class Player {
     const item = this.queue.shift();
     if (!item) { this.current = null; this.audio = null; this.emit(); return; }
     const { clip, audio } = item;
+    this.paused = false;
     this.audio = audio;
     this.current = clip;
     this.emit();
