@@ -11,3 +11,4 @@ docs
 tests
 web/node_modules
 web/dist
+app/explainer/node_modules
