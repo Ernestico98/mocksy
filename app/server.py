@@ -2,7 +2,9 @@
 
 import asyncio
 import json
+import os
 import tempfile
+import threading
 import time
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -27,10 +29,21 @@ sessions: dict[str, Session] = {}
 async def lifespan(_app):
     global loop
     loop = asyncio.get_running_loop()
+    if os.environ.get("MOCKSY_WARMUP", "1") != "0":  # tests turn it off
+        threading.Thread(target=warm_up, daemon=True).start()
     yield
 
 
 app = FastAPI(lifespan=lifespan)
+
+
+def warm_up():
+    t = time.time()
+    try:
+        speech.warm_up()
+        print(f"Speech models ready ({time.time() - t:.1f} s)", flush=True)
+    except Exception as e:  # not fatal: they load on first use instead
+        print("Speech warm-up failed:", e, flush=True)
 
 
 @app.exception_handler(packs.PackError)
