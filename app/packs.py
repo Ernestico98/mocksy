@@ -207,7 +207,11 @@ def save_pack(pack: dict, old_id: str | None = None) -> dict:
 
 
 def delete_pack(pack_id: str):
-    path = _personal_path(pack_id)
+    # Hand-made files may have names the editor wouldn't accept (e.g. My_Pack.md): still deletable.
+    base = personal_dir().resolve()
+    path = (base / f"{pack_id}.md").resolve()
+    if path.parent != base or not pack_id or pack_id.startswith("."):
+        raise KeyError(pack_id)
     if not path.exists():
         raise KeyError(pack_id)
     path.unlink()

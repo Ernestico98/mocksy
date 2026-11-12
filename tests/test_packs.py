@@ -239,3 +239,10 @@ def test_raw_markdown_conversion(client):
     assert back["title"] == "Behavioural" and back["phases"][1]["minutes"] == 30 and back["whiteboard"] is False
     r = client.post("/api/pack-markdown/parse", json={"raw": "nope"})
     assert r.status_code == 422 and "raw" in r.json()["errors"]
+
+
+def test_hand_made_pack_with_an_odd_file_name_can_be_deleted(client, tmp_path):
+    (tmp_path / "packs").mkdir()
+    (tmp_path / "packs" / "My_Pack.md").write_text('+++\ntitle = "Mine"\nphases = []\n+++\nBrief.')
+    assert client.delete("/api/packs/My_Pack").status_code == 200
+    assert not (tmp_path / "packs" / "My_Pack.md").exists()
