@@ -502,6 +502,8 @@ def create_session(pack_id: str, company: str, level: str, focus: str, lang: str
         "pack": pack_id, "pack_title": pack["title"], "company": company or pack.get("company", ""),
         "level": level, "focus": focus, "problem": problem, "lang": lang, "phases": pack["phases"],
         "rubric": pack.get("rubric", []), "whiteboard": pack.get("whiteboard", True) is not False,
+        # "Model answer" explainer: packs opt in or out; by default only rounds with a whiteboard
+        "model_answer": pack.get("model_answer", pack.get("whiteboard", True)) is not False,
         "pack_body": pack["body"],  # later edits to the pack don't change a running interview
         "model": model or settings["model"], "feedback_model": feedback_model or settings["feedback_model"],
         "effort": effort or settings["effort"],

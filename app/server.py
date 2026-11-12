@@ -217,8 +217,7 @@ class NewSession(BaseModel):
 @app.post("/api/sessions")
 def new_session(body: NewSession):
     find_pack(body.pack)
-    if model_answer.current():
-        raise HTTPException(409, "A model answer is being generated (it needs the CPU): wait for it or cancel it first.")
+    no_generation()
     for s in sessions.values():  # one live interview at a time
         if s.meta.get("status") == "live" and s.interviewer:
             s.interviewer.stop()
@@ -335,8 +334,14 @@ def stop(sid: str):
     return {"ok": True}
 
 
+def no_generation():
+    if model_answer.current():
+        raise HTTPException(409, "A model answer is being generated (it needs the CPU): wait for it or cancel it first.")
+
+
 @app.post("/api/sessions/{sid}/resume")
 def resume(sid: str):
+    no_generation()
     s = get(sid)
     for other in sessions.values():  # one live interview at a time
         if other is not s and other.meta.get("status") == "live":
@@ -349,6 +354,8 @@ def resume(sid: str):
 @app.post("/api/sessions/{sid}/end")
 async def end(sid: str):
     s = get(sid)
+    if s.meta.get("status") != "live":  # evaluating a stopped interview again: same rule as resuming
+        no_generation()
     if s.meta.get("status") == "ended":  # evaluation failed earlier: retry
         s.meta["status"] = "live"
     asyncio.get_running_loop().run_in_executor(None, s.finish)
@@ -368,7 +375,8 @@ def live_interview() -> bool:
 
 @app.get("/api/sessions/{sid}/model-answer")
 def model_answer_status(sid: str):
-    return model_answer.status(get(sid).dir)
+    s = get(sid)
+    return {**model_answer.status(s.dir), "allowed": model_answer.allowed(s.meta)}
 
 
 @app.post("/api/sessions/{sid}/model-answer")
@@ -376,6 +384,8 @@ def model_answer_start(sid: str, body: ModelAnswerIn):
     s = get(sid)
     if body.mode not in model_answer.STAGES:
         raise HTTPException(422, f"mode must be one of {', '.join(model_answer.STAGES)}")
+    if not model_answer.allowed(s.meta):
+        raise HTTPException(409, "This interview type has no model answer (its pack sets model_answer = false).")
     if not (s.dir / "feedback.json").exists():
         raise HTTPException(409, "Evaluate the interview first: the model answer builds on its evaluation.")
     if live_interview():
@@ -386,15 +396,20 @@ def model_answer_start(sid: str, body: ModelAnswerIn):
         raise HTTPException(409, str(e)) from None
 
 
-@app.delete("/api/sessions/{sid}/model-answer")
+@app.post("/api/sessions/{sid}/model-answer/cancel")
 def model_answer_cancel(sid: str):
-    """Cancels a running generation; otherwise deletes the generated files."""
+    """Cancels a running generation (a no-op if it already ended: never deletes anything)."""
+    return {"ok": True, "cancelled": model_answer.cancel(get(sid).id)}
+
+
+@app.delete("/api/sessions/{sid}/model-answer")
+def model_answer_delete(sid: str):
+    """Deletes the generated files; refused while a generation runs."""
     s = get(sid)
-    if not model_answer.cancel(s.id):
-        try:
-            model_answer.delete(s.dir)
-        except model_answer.Busy as e:
-            raise HTTPException(409, str(e)) from None
+    try:
+        model_answer.delete(s.dir)
+    except model_answer.Busy as e:
+        raise HTTPException(409, str(e)) from None
     return {"ok": True}
 
 
