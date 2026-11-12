@@ -139,10 +139,12 @@ export default function SessionView({ id, meta: app }: { id: string; meta: AppMe
       const vadAt = Date.now() / 1000;
       void api.activity(id, false).catch(() => {});
       setTranscribing(true);
+      // the interviewer gets the latest drawing with what you said: export it while Whisper runs
+      const synced = board.current?.sync().catch(() => {});
       try {
         const text = await api.transcribe(id, wav, { vadAt, silenceMs });
         if (!text) { setNotice("Didn't catch that — please say it again."); return; }
-        await board.current?.sync();  // the interviewer gets the latest drawing with what you said
+        await synced;
         await api.say(id, text);
       } catch (e) {
         setNotice("Transcription failed: " + (e as Error).message);
