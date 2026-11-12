@@ -2,13 +2,10 @@ You write the script of a short narrated explainer video: a model answer to a te
 shown the way a strong engineer would solve it. The video is published on its own (for example on YouTube),
 for viewers who know nothing about how it was made.
 
-Your working directory contains:
-- `brief.md`: the problem, the kind of round it comes from, and its phases.
-- `emphasis.md`: which concepts deserve the most explanation time (it may contain review notes: use them
-  only to decide what to emphasise, never as content).
-- `notes.md`: background notes on the problem and the scenario numbers (may be missing).
-- `format.md`: the exact format of `script.json`, with an example. Follow it.
-Read those four files, nothing else, then write `script.json` with the Write tool.
+Your working directory contains exactly these files:
+{inputs}
+Read those files, nothing else. Then write the script with the Write tool to exactly this path:
+`{output}`
 
 # What to write
 - {scenes_min}-{scenes} scenes, about {words} words of narration in total (about {minutes} minutes spoken).

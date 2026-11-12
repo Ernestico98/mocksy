@@ -2,6 +2,7 @@
 
 import json
 import os
+import re
 import threading
 import time
 
@@ -193,6 +194,11 @@ def test_script_worker_reads_only_bounded_inputs(fake, done_session):
     d = call["cwd"]
     files = sorted(p.name for p in d.iterdir())
     assert files == ["brief.md", "emphasis.md", "format.md", "scenario.md", "script.json"]
+    # the prompt names exactly the files in the folder, and the exact output path
+    named = re.findall(r"^- `([^`]+)`:", call["system"], flags=re.M)
+    assert sorted(named) == sorted(set(files) - {"script.json"}) == sorted(ma.SCRIPT_INPUTS)
+    assert str((d / "script.json").resolve()) in call["system"] and str(d.resolve() / "script.json") in call["prompt"]
+    assert "notes.md" not in call["system"]
     text = "".join(p.read_text() for p in d.iterdir())
     # no transcript, verdict, evaluation free text, observations or personal details
     for secret in ("SECRET", "lean hire", "Globex", "didn't land", "03:10"):
@@ -209,14 +215,23 @@ def test_script_worker_reads_only_bounded_inputs(fake, done_session):
     assert "Never name Acme" in call["system"]
 
 
-def test_scenario_without_sections_drops_remarks(fake, done_session):
+def test_scenario_from_unheaded_notes_uses_only_the_opening(fake, done_session):
     (done_session.dir / "notes.md").write_text(
-        "Problem: URL shortener, 10M links a day.\nCandidate seemed nervous.\nThey asked about TTLs at 04:12.\n"
-        "Keys are 7 characters.\n## Observations so far\n- strong on estimates\n")
-    g = ma.Generation(done_session.dir, done_session.meta, lambda e: None, "diagram")
-    text = g.scenario()
-    assert "10M links a day" in text and "7 characters" in text
-    assert "nervous" not in text and "04:12" not in text and "strong on estimates" not in text
+        "Problem: URL shortener, 10M links a day.\nMy guess: senior-ish, works at Acme.\nKeys are 7 characters.\n")
+    text = ma.Generation(done_session.dir, done_session.meta, lambda e: None, "diagram").scenario()
+    assert "Let's design a rate limiter" in text
+    assert "10M" not in text and "Acme" not in text and "senior" not in text
+
+
+def test_scenario_from_headed_notes_drops_remarks(fake, done_session):
+    (done_session.dir / "notes.md").write_text(
+        "# Hidden scenario: URL shortener\nOpening: shorten links.\nHidden: 10M links a day, keys of 7 characters.\n"
+        "My guess: senior-ish, works at Acme.\nCandidate seemed nervous.\nThey asked about TTLs at 04:12.\n"
+        "## Observations so far\n- strong on estimates\n")
+    text = ma.Generation(done_session.dir, done_session.meta, lambda e: None, "diagram").scenario()
+    assert "10M links a day" in text and "Opening: shorten links." in text
+    for leak in ("Acme", "senior", "nervous", "04:12", "strong on estimates", "Observations"):
+        assert leak not in text, leak
 
 
 def test_scene_workers_are_bounded(fake, done_session):
@@ -279,11 +294,11 @@ def test_script_bounced_once_then_accepted(fake, done_session):
 
 
 def test_script_bounced_once_then_fails(fake, done_session):
-    fake.scripts = [make_script(say_extra="You missed the cache.")]
+    fake.scripts = [make_script(say_extra="In this mock interview, cache first.")]
     state, _ = run(done_session, "diagram")
     assert state["status"] == "failed"
     assert state["stages"]["script"]["status"] == "failed"
-    assert "after one revision" in state["error"] and "You missed" in state["error"]
+    assert "after one revision" in state["error"] and "mock interview" in state["error"]
     assert len(fake.calls) == 2  # one write, one revision, no more
     assert not (done_session.dir / "model_answer" / "script.md").exists()
 
@@ -542,9 +557,18 @@ def test_png_needs_no_ffmpeg(fake, done_session, monkeypatch):
 
 
 def test_pack_gating():
-    assert ma.allowed({"whiteboard": True}) and not ma.allowed({"whiteboard": False})
     assert not ma.allowed({"whiteboard": True, "model_answer": False})
     assert ma.allowed({"whiteboard": False, "model_answer": True})
+    # older sessions without the key: only an explicit flag in the current pack file enables it
+    assert ma.allowed({"pack": "system-design"})                    # built-in pack says model_answer = true
+    assert not ma.allowed({"pack": "behavioural", "whiteboard": True})  # says false
+    ok, why = ma.availability({"pack": "deleted-pack"})
+    assert not ok and "model_answer = true" in why
+    from app import packs
+    packs.save_pack({"id": "legacy-personal", "title": "Legacy", "phases": [{"key": "a", "label": "A", "minutes": 5}],
+                     "body": "private prep", "whiteboard": True, "rubric": ["R"]})
+    ok, why = ma.availability({"pack": "legacy-personal", "whiteboard": True})
+    assert not ok and "set `model_answer = true`" in why
     beh = sessions.create_session("behavioural", "", "", "", "en", "haiku", "haiku", lambda e: None)
     assert beh.meta["model_answer"] is False
     sd = sessions.create_session("system-design", "", "", "", "en", "haiku", "haiku", lambda e: None)
@@ -574,37 +598,81 @@ def test_validate_rejects(mutate, expected):
     assert any(expected in e for e in sc.validate(s, 2)), sc.validate(s, 2)
 
 
-FLAGGED = [
-    "The candidate should have asked about scale.", "In this session we design a cache.",
-    "A common mistake is to skip estimates.", "You said Redis, but", "Your answer missed the queue.",
-    "That would get a hire verdict.", "The feedback was clear.", "During the mock round",
-    "the interviewer pushes on it", "A common pitfall in interviews", "In a system design interview, start here.",
-    "You never mentioned the cache.", "Earlier you talked about sharding.", "Here you went straight to the database.",
-    "Practice round recap", "That would get a strong yes.", "You scored a 3 here.",
-    "No mencionaste la caché.", "Te faltó la cola.", "Un error común es olvidar la caché.", "En esta entrevista",
-    "El candidato olvidó la caché.",
+HARD = [
+    "The candidate should have asked about scale.", "Your answer missed the queue.", "That would get a hire verdict.",
+    "During the mock round", "the interviewer pushes on it", "In a system design interview, start here.",
+    "Practice round recap", "That would get a strong yes.", "You scored a 3 here.", "In this kind of round, start with numbers.",
+    "Assessors look for trade-offs.", "The hiring panel wants depth.", "I was asked this in a loop.",
+    "Your earlier design skipped the cache.", "En esta entrevista", "El candidato olvidó la caché.", "En la ronda anterior",
+]
+SOFT = [
+    "In this session we design a cache.", "A common mistake is to skip estimates.", "You said Redis, but",
+    "The feedback was clear.", "A common pitfall in interviews", "You never mentioned the cache.",
+    "Earlier you talked about sharding.", "Here you went straight to the database.", "A stronger answer would add a queue.",
+    "Most people jump straight to the database.", "As you saw a moment ago, you put the cache first.",
+    "It was drawn on the board earlier.", "No mencionaste la caché.", "Te faltó la cola.", "Un error común es olvidar la caché.",
+    "Una mejor respuesta añade una cola.", "Faltó hablar de la caché.", "Respondiste rápido.",
 ]
 
 ALLOWED = [
     "You'd want a queue here.", "The user session token expires after an hour.", "Store session state in Redis.",
     "In Raft, a follower becomes a candidate and requests votes.", "El nodo pasa a candidato y pide votos.",
-    "Candidate keys identify a row.", "The candidate generation step retrieves 500 items.",
+    "Candidate keys identify a row.", "The candidate generation step retrieves 500 items.", "Candidates are re-ranked by score.",
     "Add a forgot password flow.", "A missed heartbeat triggers failover.", "The job missed its deadline.",
     "A relevance score ranks results.", "La puntuación de relevancia ordena los resultados.",
     "The session expires after 30 minutes.", "Mock the payment API in tests.", "A mock server helps testing.",
     "User feedback loops improve ranking.", "Customers hire workers by the hour.", "Hiring managers review applicants.",
     "If you said yes to every request, the queue would grow.", "Cache misses fall through to the database.",
+    "User interviews showed the pain.", "La entrevista de usuarios mostró el problema.", "Common mistakes when sharding.",
+    "The training run takes hours.", "Add a practice session feature.", "This round of retries backs off.",
+    "Previous round of compaction freed space.", "You did the math.", "You covered reads.", "Elegiste Postgres, así que…",
 ]
 
 
-@pytest.mark.parametrize("text", FLAGGED)
-def test_neutrality_flags(text):
-    assert sc.check_text(text), text
+@pytest.mark.parametrize("text", HARD)
+def test_neutrality_hard(text):
+    assert sc.hard_findings(text), text
+
+
+@pytest.mark.parametrize("text", SOFT)
+def test_neutrality_soft(text):
+    found = sc.findings(text)
+    assert found and not any(h for h, _ in found), found
 
 
 @pytest.mark.parametrize("text", ALLOWED)
 def test_neutrality_allows_technical_language(text):
     assert sc.check_text(text) == [], sc.check_text(text)
+
+
+def test_soft_findings_warn_without_failing(fake, done_session):
+    fake.scripts = [make_script(say_extra="You said Redis earlier.")]
+    state, _ = run(done_session)
+    assert state["status"] == "done"
+    assert [c["stage"] for c in fake.calls].count("script") == 1  # no revision for warnings alone
+    assert any("You said" in w for w in state["warnings"])
+    qa = next(c for c in fake.calls if c["stage"] == "qa")
+    assert "You said" in qa["prompt"] and "second look" in qa["prompt"]
+
+
+def test_failed_fix_worker_keeps_the_round(fake, done_session, monkeypatch):
+    fake.qa_issues = [{"scene": "s02", "t": 1.0, "severity": "high", "kind": "layout", "issue": "overlap", "fix": "move"}]
+    real = fake.__call__
+
+    def flaky(cwd, prompt, **kw):
+        if prompt.startswith("A review of the rendered frames"):
+            fake.calls.append({"stage": "fixes-crash", "prompt": prompt})
+            return {"result": "usage limit reached", "cost_usd": 0.0, "session_id": kw.get("resume"), "is_error": True,
+                    "subtype": "error_during_execution", "usage": {}}
+        return real(cwd, prompt, **kw)
+    monkeypatch.setattr(ma, "run_claude", flaky)
+    state, _ = run(done_session)
+    assert state["status"] == "failed" and state["stages"]["fixes"]["status"] == "failed"
+    assert state.get("fix_rounds_used", 0) == 0
+    monkeypatch.setattr(ma, "run_claude", fake)
+    state, _ = run(done_session)
+    assert state["status"] == "done" and state["fix_rounds_used"] == 1
+    assert [c["stage"] for c in fake.calls].count("fixes") == 1  # the retry did run the fixes
 
 
 @pytest.mark.parametrize("variant", ["Acme Corp", "acme-corp", "AcmeCorp", "ACME.corp"])

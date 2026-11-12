@@ -35,6 +35,7 @@ import soundfile as sf
 from . import speech
 from .config import LANGUAGES, PROMPTS, ROOT, load_settings
 from .explainer import script as sc
+from .packs import get_pack
 from .sessions import SafeDict, pack_snapshot
 
 EXPLAINER = ROOT / "app" / "explainer"
@@ -62,6 +63,15 @@ PROFILE = {"script": ((30_000, 15_000, 15_000), 0),           # (fixed, per scen
            "scenes": ((0, 0, 0), (40_000, 180_000, 14_000)),
            "qa": ((5_000, 5_000, 500), (5_000, 10_000, 1_000)),
            "fixes": ((0, 0, 0), (8_000, 36_000, 2_800))}
+# The script worker's folder holds exactly these inputs (the prompt lists them from here too)
+SCRIPT_INPUTS = {
+    "brief.md": "the problem, the kind of round it comes from, and its phases.",
+    "scenario.md": "the problem as it was posed: the opening prompt and, when the notes have one, the hidden "
+                   "context and numbers.",
+    "emphasis.md": "which areas deserve the most explanation time.",
+    "format.md": "the exact format of `script.json`, with an example. Follow it.",
+}
+
 MINUTES = {"video": (17, 25), "diagram": (2, 5)}
 
 
@@ -166,11 +176,29 @@ def explainer_ready() -> str | None:
     return None
 
 
-def allowed(meta: dict) -> bool:
-    """Packs opt out with `model_answer = false`; the default follows `whiteboard` (a model answer of a
-    conversation-only round, such as personal stories, makes no sense and would expose personal details)."""
+LEGACY_HINT = ("This session predates the model-answer setting: set `model_answer = true` in its interview "
+               "type's header to enable it.")
+
+
+def availability(meta: dict) -> tuple[bool, str]:
+    """Whether a session may get a model answer, and why not. New sessions carry `model_answer` (from the pack:
+    explicit, or `whiteboard` by default). Older sessions don't: the pack file decides, only if it says so
+    explicitly; otherwise no (a conversation-only round, such as personal stories, makes no sense and its brief
+    may hold personal details)."""
     v = meta.get("model_answer")
-    return bool(v) if isinstance(v, bool) else meta.get("whiteboard", True) is not False
+    if isinstance(v, bool):
+        return v, "" if v else "This interview type has no model answer (its pack sets model_answer = false)."
+    try:
+        v = get_pack(meta.get("pack", "")).get("model_answer")
+    except KeyError:
+        v = None
+    if isinstance(v, bool):
+        return v, "" if v else "This interview type has no model answer (its pack sets model_answer = false)."
+    return False, LEGACY_HINT
+
+
+def allowed(meta: dict) -> bool:
+    return availability(meta)[0]
 
 
 # ------------------------------------------------------------------ estimates
@@ -408,15 +436,18 @@ class Generation:
             notes = (self.sdir / "notes.md").read_text()
         except OSError:
             pass
+        # only a headed scenario section (the interviewer is asked for "## Scenario"); unheaded notes mix the
+        # scenario with remarks about the candidate, so they're not used at all
         sections = re.split(r"(?m)^(?=#{1,3} )", notes)
-        scen = [x for x in sections if re.match(r"#{1,3} .*(scenario|problem|hidden|context|plan)", x, re.I)
+        scen = [x for x in sections if re.match(r"#{1,3} .*(scenario|problem|hidden|context)", x, re.I)
                 and not self.OBSERVATION.search(x.splitlines()[0])]
         kept = []
-        for line in ("".join(scen) if scen else notes).splitlines():
-            if self.OBSERVATION.search(line) and line.lstrip().startswith("#"):
-                break  # observations start here
-            if (re.search(r"\b\d{1,2}:\d{2}\b|\bcandidate|\b(they|he|she|their|his|her)\b", line, re.I)
-                    or sc.check_text(line)):
+        for line in "".join(scen).splitlines()[1:] if scen else []:
+            if line.lstrip().startswith("#"):
+                continue
+            if (re.search(r"\b\d{1,2}:\d{2}\b|\bcandidate|\b(they|he|she|their|his|her|my guess|guess|seems?|seemed|"
+                          r"works? at|worked at|background|resume|cv|nervous|confident|senior-ish|junior-ish)\b", line, re.I)
+                    or self.OBSERVATION.search(line) or sc.check_text(line)):
                 continue  # timestamps and remarks about the person
             kept.append(line)
         out = ["# Scenario", ""]
@@ -444,47 +475,59 @@ class Generation:
         words = n * sc.WORDS_PER_SCENE
         return (PROMPTS_X / "script.md").read_text().format_map(SafeDict(
             scenes=n, scenes_min=max(1, n - 1), words=words, minutes=f"{words / 140:.0f}-{words / 125:.0f}",
-            language_name=LANGUAGES.get(self.meta["lang"], self.meta["lang"]), company_rule=rule))
+            language_name=LANGUAGES.get(self.meta["lang"], self.meta["lang"]), company_rule=rule,
+            inputs="\n".join(f"- `{name}`: {what}" for name, what in SCRIPT_INPUTS.items()),
+            output=str(self.script_dir() / "script.json")))
+
+    def script_dir(self) -> Path:
+        return (self.dir / "script").resolve()
 
     def script(self) -> dict:
         return json.loads((self.dir / "script.json").read_text())
 
     # ---------------------------------------------------------------- stages
-    def check_script(self, d: Path) -> list[str]:
+    def check_script(self, d: Path) -> tuple[list[str], list[str]]:
+        """(problems that must be fixed, warnings worth a second look)."""
         try:
             data = json.loads((d / "script.json").read_text())
         except OSError:
-            return ["script.json was not written"]
+            return [f"the script wasn't written to {d / 'script.json'}"], []
         except ValueError as e:
-            return [f"script.json is not valid JSON: {e}"]
+            return [f"script.json is not valid JSON: {e}"], []
         problems = sc.validate(data, int(self.settings["ma_scenes"]))
-        if not problems:
-            problems = [f"publishing rule: {v}" for v in sc.neutrality(data, self.company())]
-        return problems
+        if problems:
+            return problems, []
+        return ([f"publishing rule: {v}" for v in sc.neutrality(data, self.company())],
+                [f"check: {v}" for v in sc.neutrality(data, self.company(), hard=False)])
 
     def stage_script(self):
-        d = self.dir / "script"
-        d.mkdir(exist_ok=True)
-        (d / "brief.md").write_text(self.brief())
-        (d / "emphasis.md").write_text(self.emphasis())
-        (d / "notes.md").unlink(missing_ok=True)  # older versions copied the raw notes
-        (d / "scenario.md").write_text(self.scenario())
-        shutil.copy(PROMPTS_X / "format.md", d / "format.md")
-        (d / "script.json").unlink(missing_ok=True)
+        d = self.script_dir()
+        shutil.rmtree(d, ignore_errors=True)  # exactly the inputs, nothing left from an earlier run
+        d.mkdir(parents=True)
+        inputs = {"brief.md": self.brief(), "scenario.md": self.scenario(), "emphasis.md": self.emphasis(),
+                  "format.md": (PROMPTS_X / "format.md").read_text()}
+        assert set(inputs) == set(SCRIPT_INPUTS)
+        for name, text in inputs.items():
+            (d / name).write_text(text)
+        out = d / "script.json"
         system, model = self.script_prompt(), self.settings["ma_script_model"]
         tools = ["Read", "Write"]
         allow = [path_rule("Read", d, "**"), path_rule("Edit", d / "script.json")]
-        r = self.worker("script", "script", d, "Write script.json now.", system, model, tools, allow)
-        problems = self.check_script(d)
+        r = self.worker("script", "script", d, f"Write the script to {out} now.", system, model, tools, allow)
+        problems, warnings = self.check_script(d)
         if problems:
             self.stage("script", detail=f"{len(problems)} problem(s): one revision")
-            msg = ("script.json was rejected. Fix every problem below, write script.json again, then reply with "
-                   "one line.\n" + "\n".join(f"- {p}" for p in problems[:40]))
+            msg = (f"The script was rejected. Fix every problem below, write it again to exactly {out} (that path, "
+                   "nowhere else), then reply with one line.\n" + "\n".join(f"- {p}" for p in problems[:40]))
+            if warnings:
+                msg += ("\nAlso reword these if they refer to a person, a practice round or someone's attempt (leave "
+                        "them if they are technical):\n" + "\n".join(f"- {w}" for w in warnings[:20]))
             self.worker("script", "script revision", d, msg, system, model, tools, allow, resume=r.get("session_id"))
-            problems = self.check_script(d)
+            problems, warnings = self.check_script(d)
             if problems:
                 raise StageError("The script still breaks the rules after one revision:\n"
                                  + "\n".join(f"- {p}" for p in problems[:12]))
+        self.state["warnings"] = warnings  # for the QA pass
         data = json.loads((d / "script.json").read_text())
         (self.dir / "script.json").write_text(json.dumps(data, indent=1, ensure_ascii=False))
         (self.dir / "script.md").write_text(sc.markdown(data, None))
@@ -649,11 +692,13 @@ class Generation:
         self.state["scene_flags"] = self.scene_flags()
         self.stage("scenes", detail=f"{len(ids)}/{len(ids)} scenes")
 
-    def scene_flags(self) -> dict[str, list[str]]:
-        """On-screen strings in the scene sources that break the publishing rules (deterministic check)."""
+    def scene_flags(self, hard: bool = True) -> dict[str, list[str]]:
+        """On-screen strings in the scene sources that break the publishing rules (deterministic check): the
+        hard ones, or with hard=False the ones worth a second look."""
         flags = {}
         for f in sorted((self.work / "scenes").glob("*.js")):
-            found = [f'"{s[:80]}": {v}' for s in sc.scene_literals(f.read_text()) for v in sc.check_text(s, self.company())]
+            found = [f'"{s[:80]}": {msg}' for s in sc.scene_literals(f.read_text())
+                     for h, msg in sc.findings(s, self.company()) if h == hard]
             if found:
                 flags[f.stem] = found
         return flags
@@ -703,7 +748,14 @@ class Generation:
             f.unlink(missing_ok=True)
         allow = [path_rule("Read", self.work / "out" / "qa", "**"), path_rule("Edit", self.work / "out" / "qa" / "qa.json")]
         deny = [path_rule("Read", self.work / "scenes", "**")]
-        self.worker("qa", "qa", self.work, "Review the frames now.", (PROMPTS_X / "qa.md").read_text(),
+        warnings = list(self.state.get("warnings") or []) + [
+            f"{sid}: {w}" for sid, ws in self.scene_flags(hard=False).items() for w in ws]
+        prompt = "Review the frames now."
+        if warnings:
+            prompt += ("\nA text check flagged these phrases for a second look. Report one as an issue (kind neutrality) "
+                       "only if it really refers to a person, a practice round or someone's attempt:\n"
+                       + "\n".join(f"- {w}" for w in warnings[:30]))
+        self.worker("qa", "qa", self.work, prompt, (PROMPTS_X / "qa.md").read_text(),
                     self.settings["ma_qa_model"], ["Read", "Write"], allow, deny)
         try:
             qa = json.loads(next((f for f in found if f.exists()), found[0]).read_text())
@@ -739,8 +791,7 @@ class Generation:
             self.finish_fixes(issues, "nothing to fix" if not issues else
                               "turned off in settings" if rounds < 1 else "the fix round was already used")
             return
-        self.state["fix_rounds_used"] = used + 1
-        self.save()
+
         workers = self.state.get("workers", {})
         owner = {s: name for name, w in workers.items() for s in w["scenes"]}
         by_worker: dict[str, list[dict]] = {}
@@ -775,7 +826,9 @@ class Generation:
         for kind in (Cancelled, BudgetExceeded, Exception):
             e = next((e for e in errors if isinstance(e, kind)), None)
             if e:
-                raise e
+                raise e  # the round isn't used up: a retry runs it again
+        self.state["fix_rounds_used"] = used + 1
+        self.save()
         self.state["qa"]["fixed"] = len(issues)
         self.finish_fixes(issues, f"{len(issues)} issue(s) sent back")
 
