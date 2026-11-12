@@ -60,6 +60,7 @@ def test_short_real_video(monkeypatch):
     assert st["cost_usd"] <= BUDGET
     inputs = "".join(p.read_text() for p in (g.dir / "script").iterdir() if p.suffix == ".md")
     assert "lean hire" not in inputs.lower() and "missed atomicity" not in inputs and "04:10" not in inputs
+    assert "50k requests per second" in (g.dir / "script" / "scenario.md").read_text()
     # the toolkit stayed untouched and render rounds stayed within 2 per scene
     assert (g.work / "render.mjs").read_text().startswith("// Runs the shared renderer")
     counts = json.loads((g.work / ".render_counts.json").read_text()) if (g.work / ".render_counts.json").exists() else {}

@@ -70,10 +70,13 @@ are spoken with local Kokoro TTS. At the end a second Claude call writes the eva
   shim counts render rounds per scene (`.render_limits.json`: 2, +1 per fix).
 - Isolation: `--permission-mode default` + path rules (`Read(//abs/**)`, writes via `Edit(//abs/file)`: `Write(...)`
   path rules grant nothing) + deny rules for the toolkit files, which are also read-only on disk.
-- Packs: `model_answer = false` hides the tab and the API refuses (default: follows `whiteboard`).
-- Publishing rules: the script is a neutral explainer (no candidate, interview session, mock, mistakes, score,
-  feedback, verdict, company name unless `ma_name_company`). `explainer/script.py:neutrality` runs on script.json
-  (one bounce, then fail) and on scene string literals (fed to QA/fixes, fail if they remain); QA checks frames.
+- Packs: `model_answer = false` hides the tab and the API refuses (default for new sessions: follows `whiteboard`).
+  Sessions without the key (older ones) need an explicit `model_answer = true` in their pack, else they're refused.
+- Publishing rules: the script is a neutral explainer (no candidate, interview as a setting, mock round, verdict,
+  score, company name unless `ma_name_company`). `explainer/script.py:findings` has two tiers: hard (unambiguous)
+  hits bounce the script once then fail, and in scene strings become forced QA issues; soft (ambiguous) hits are
+  warnings passed to the revision and the QA prompt. Keep both lists in tests (HARD/SOFT/ALLOWED).
+- Script inputs: `SCRIPT_INPUTS` in model_answer.py is the single list the prompt shows and the folder holds.
 - One generation at a time; blocked while an interview is live, and new/resumed interviews and re-evaluations are
   blocked while it runs.
 - Tests: `tests/test_model_answer.py` (fake Claude + fake renderer), `tests/test_explainer_render.py` (real

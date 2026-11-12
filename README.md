@@ -126,11 +126,13 @@ how to solve it well, ready to publish (on YouTube, for example):
 
 The evaluation only decides which areas get more time: the script step gets the rubric dimensions
 ordered by score, never the evaluation's text, the transcript or anything personal, plus the problem as
-it was posed (the opening prompt and the scenario part of the interviewer's notes). The output never
+it was posed (the opening prompt, plus the `## Scenario` section of the interviewer's notes when there is one). The output never
 mentions a candidate, the interview, mistakes, scores or a verdict, and doesn't name the target company
-unless you allow it in the settings. That's enforced three times: in the script prompt; by a check in code on the script
-(it's sent back once with the violations, and the run fails if they remain); and by the review pass,
-which also checks on-screen text and numbers against the narration. Figures the script made up are
+unless you allow it in the settings. That's enforced three times: in the script prompt; by a check in code on the script and on the
+scenes' on-screen text; and by the review pass, which also checks on-screen text and numbers against
+the narration. The check has two tiers: unambiguous references (a candidate, an interview as a setting,
+verdicts, the company) are sent back once and fail the run if they remain; ambiguous phrasing ("you said",
+"a stronger answer") becomes a warning the review pass looks at. Figures the script made up are
 listed as assumptions in the app, the markdown and the YouTube text.
 
 **How it's made.** The backend runs a stage machine (Script → Diagram → Voice → Scenes → Render → QA →
@@ -153,6 +155,7 @@ stage, the cap, the scene count, the fix round and the company setting are under
 
 It's offered for rounds with a whiteboard. A pack can opt in or out with `model_answer = true/false` in
 its header; the behavioural pack opts out, since a model answer of personal stories makes no sense.
+Sessions recorded before this setting existed need the flag set explicitly in their pack.
 
 **You'll need** (video only) Node, ffmpeg and Chrome: `scripts/setup.sh` installs the renderer and,
 without a system Chrome or Chromium, downloads Playwright's headless Chromium. In Docker, build with
