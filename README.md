@@ -130,9 +130,11 @@ it was posed (the opening prompt, plus the `## Scenario` section of the intervie
 mentions a candidate, the interview, mistakes, scores or a verdict, and doesn't name the target company
 unless you allow it in the settings. That's enforced three times: in the script prompt; by a check in code on the script and on the
 scenes' on-screen text; and by the review pass, which also checks on-screen text and numbers against
-the narration. The check has two tiers: unambiguous references (a candidate, an interview as a setting,
-verdicts, the company) are sent back once and fail the run if they remain; ambiguous phrasing ("you said",
-"a stronger answer") becomes a warning the review pass looks at. Figures the script made up are
+the narration. The check has two tiers: unambiguous references (a candidate, an interview or mock as a setting,
+what "you" said or left out, verdicts, scores, the company) are sent back once and fail the run if they
+remain; ambiguous phrasing ("a stronger answer", "most people jump to…") gets the same single revision,
+and whatever is left, along with review findings about the narration, is listed under **Review before
+publishing** in the tab and in the script markdown (never in the YouTube text). Figures the script made up are
 listed as assumptions in the app, the markdown and the YouTube text.
 
 **How it's made.** The backend runs a stage machine (Script → Diagram → Voice → Scenes → Render → QA →

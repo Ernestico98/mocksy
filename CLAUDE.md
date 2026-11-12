@@ -74,8 +74,10 @@ are spoken with local Kokoro TTS. At the end a second Claude call writes the eva
   Sessions without the key (older ones) need an explicit `model_answer = true` in their pack, else they're refused.
 - Publishing rules: the script is a neutral explainer (no candidate, interview as a setting, mock round, verdict,
   score, company name unless `ma_name_company`). `explainer/script.py:findings` has two tiers: hard (unambiguous)
-  hits bounce the script once then fail, and in scene strings become forced QA issues; soft (ambiguous) hits are
-  warnings passed to the revision and the QA prompt. Keep both lists in tests (HARD/SOFT/ALLOWED).
+  hits bounce the script once then fail, and in scene strings become forced QA issues; soft (ambiguous) hits share
+  that single revision, then go to the QA prompt and to `state.review` (tab + script.md "Review before publishing",
+  never youtube.txt), together with QA findings that have no scene. Keep the lists in tests (HARD/SOFT/ALLOWED).
+- Fix round: `fix_done` lists the workers that finished, so a retry re-runs only the others.
 - Script inputs: `SCRIPT_INPUTS` in model_answer.py is the single list the prompt shows and the folder holds.
 - One generation at a time; blocked while an interview is live, and new/resumed interviews and re-evaluations are
   blocked while it runs.
