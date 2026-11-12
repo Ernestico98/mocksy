@@ -124,7 +124,7 @@ class Session:
             return
         self.interviewer = Interviewer(
             self.dir, self.meta["model"], self.system_prompt(),
-            self.meta.get("claude_session_id"), self.on_interviewer)
+            self.meta.get("claude_session_id"), self.on_interviewer, effort=self.meta.get("effort"))
 
     def start(self):
         self.meta["started_at"] = time.time()
@@ -481,7 +481,7 @@ def evaluate(s: Session) -> dict:
 
 def create_session(pack_id: str, company: str, level: str, focus: str, lang: str,
                    model: str | None, feedback_model: str | None,
-                   broadcast: Callable[[dict], None], problem: str = "") -> Session:
+                   broadcast: Callable[[dict], None], problem: str = "", effort: str | None = None) -> Session:
     pack = get_pack(pack_id)
     settings = load_settings()
     slug = re.sub(r"[^a-z0-9]+", "-", (company or pack_id).lower()).strip("-")[:24]
@@ -497,6 +497,7 @@ def create_session(pack_id: str, company: str, level: str, focus: str, lang: str
         "rubric": pack.get("rubric", []), "whiteboard": pack.get("whiteboard", True) is not False,
         "pack_body": pack["body"],  # later edits to the pack don't change a running interview
         "model": model or settings["model"], "feedback_model": feedback_model or settings["feedback_model"],
+        "effort": effort or settings["effort"],
     }
     (path / "meta.json").write_text(json.dumps(meta, indent=2, ensure_ascii=False))
     return Session(path, broadcast)

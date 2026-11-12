@@ -17,6 +17,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from . import packs, speech
+from .interviewer import EFFORTS
 from .config import LANGUAGES, ROOT, SESSIONS, load_settings, save_settings
 from .sessions import Session, create_session
 
@@ -75,12 +76,13 @@ def meta():
               for p in packs.load_packs()]
     return {"packs": listed, "languages": LANGUAGES, "voices": speech.voices(),
             "settings": load_settings(),
-            "models": ["haiku", "sonnet", "opus", "fable"]}
+            "models": ["haiku", "sonnet", "opus", "fable"], "efforts": EFFORTS}
 
 
 class SettingsIn(BaseModel):
     model: str | None = None
     feedback_model: str | None = None
+    effort: str | None = None
     speed: float | None = None
     voice_en: str | None = None
     voice_es: str | None = None
@@ -201,6 +203,7 @@ class NewSession(BaseModel):
     lang: str = "en"
     model: str | None = None
     feedback_model: str | None = None
+    effort: str | None = None
 
 
 @app.post("/api/sessions")
@@ -212,7 +215,7 @@ def new_session(body: NewSession):
             s.meta["status"] = "ended"
             s.save()
     s = create_session(body.pack, body.company, body.level, body.focus, body.lang,
-                       body.model, body.feedback_model, broadcast, body.problem)
+                       body.model, body.feedback_model, broadcast, body.problem, body.effort)
     sessions[s.id] = s
     s.start()
     return s.public()

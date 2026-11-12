@@ -152,3 +152,11 @@ def test_failed_turn_is_reported_as_an_error():
     it._read()
     assert ("error", "Claude Code: Not logged in · Please run /login") in events
     assert events.index(("turn_end", 0)) < events.index(("error", "Claude Code: Not logged in · Please run /login"))
+
+
+def test_effort_is_passed_only_when_set():
+    assert "--effort" not in claude_args("sonnet", "P")
+    assert "--effort" not in claude_args("sonnet", "P", effort="default")
+    args = claude_args("haiku", "P", effort="low")
+    assert args[args.index("--effort") + 1] == "low"
+    assert "--effort" not in claude_args("haiku", "P", effort="--dangerous")  # only known levels

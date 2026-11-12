@@ -91,11 +91,14 @@ def cache_usage(session_id: str | None) -> list[dict]:
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--model", default="haiku")
+    ap.add_argument("--effort", default="default", help="interviewer effort: default, low, medium, high")
     ap.add_argument("--turns", type=int, default=3)
     ap.add_argument("--lang", default="en", choices=sorted(UTTERANCES))
     ap.add_argument("--pack", default="system-design")
     ap.add_argument("--silence-ms", type=int, default=1300,
                     help="trailing pause in each WAV, i.e. what the VAD waited (default 1300)")
+    ap.add_argument("--cold-stt", action="store_true",
+                    help="only load Whisper instead of the server's startup warm-up (the old behaviour)")
     ap.add_argument("--keep", action="store_true", help="keep the throwaway data folder")
     args = ap.parse_args()
 
@@ -109,8 +112,12 @@ def main():
     speech.synthesize("Warm up.", "af_heart", "en", 1.0)
     print(f"Kokoro cold start      {ms(time.time() - t)} ms")
     t = time.time()
-    speech.preload_stt()
-    print(f"Whisper cold start     {ms(time.time() - t)} ms  ({speech.stt_engine()})")
+    if args.cold_stt:
+        speech.preload_stt()
+        print(f"Whisper load           {ms(time.time() - t)} ms  ({speech.stt_engine()}, no warm-up)")
+    else:
+        speech.warm_up()  # what the server does in the background at startup
+        print(f"Speech warm-up         {ms(time.time() - t)} ms  ({speech.stt_engine()})")
 
     wavs = []
     for i, text in enumerate((UTTERANCES[args.lang] * 3)[:args.turns]):
@@ -126,7 +133,8 @@ def main():
                 print("  ! error:", ev.get("detail"))
             idle.set()
 
-    s = sessions.create_session(args.pack, "", "Senior", "", args.lang, args.model, args.model, broadcast)
+    s = sessions.create_session(args.pack, "", "Senior", "", args.lang, args.model, args.model, broadcast,
+                                effort=args.effort)
     t = time.time()
     s.start()
     if not idle.wait(240):
@@ -165,7 +173,7 @@ def main():
         time.sleep(1)  # let the TTS of the rest of the reply finish, as a human would listen
 
     keys = ["stt_ms", "handoff_ms", "model_ms", "chunk_ms", "tts_ms", "total_ms"]
-    print(f"\nMedian over {len(rows)} turns ({args.model}, {args.lang}, pause {args.silence_ms} ms not included):")
+    print(f"\nMedian over {len(rows)} turns ({args.model}, effort {args.effort}, {args.lang}, pause {args.silence_ms} ms not included):")
     for k in keys:
         vals = [r[k] for r in rows if k in r]
         if vals:

@@ -142,3 +142,12 @@ def test_unknown_session_is_404(client):
     assert client.get("/api/sessions/nope").status_code == 404
     assert client.post("/api/sessions/nope/say", json={"text": "x"}).status_code == 404
     assert client.get("/api/sessions/..%2F..%2Fapp").status_code == 404
+
+
+def test_effort_comes_from_settings_or_the_request(client):
+    assert "low" in client.get("/api/meta").json()["efforts"]
+    assert client.get("/api/meta").json()["settings"]["effort"] == "default"
+    new(client)
+    assert FakeInterviewer.instances[-1].effort == "default"
+    new(client, effort="low")
+    assert FakeInterviewer.instances[-1].effort == "low"

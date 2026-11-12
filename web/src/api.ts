@@ -25,6 +25,8 @@ export interface Settings {
   model: string;
   feedback_model: string;
   feedback_language: string;
+  /** interviewer reasoning effort: "default" (the CLI's choice), "low", "medium", "high" */
+  effort: string;
   speed: number;
   voice_en: string;
   voice_es: string;
@@ -36,6 +38,7 @@ export interface AppMeta {
   voices: string[];
   settings: Settings;
   models: string[];
+  efforts: string[];
 }
 
 export type SessionStatus = "setup" | "live" | "evaluating" | "ended" | "done";
@@ -56,6 +59,7 @@ export interface SessionMeta {
   whiteboard?: boolean;
   model: string;
   feedback_model: string;
+  effort?: string;
   started_at?: number;
   ended_at?: number;
   phase?: { key: string; started_at: number };
@@ -159,7 +163,7 @@ export const api = {
   saveSettings: (patch: Partial<Settings>) => request<Settings>("/api/settings", patch),
   sessions: () => request<SessionSummary[]>("/api/sessions"),
   createSession: (body: {
-    pack: string; company: string; level: string; focus: string; problem: string; lang: string; model: string; feedback_model: string;
+    pack: string; company: string; level: string; focus: string; problem: string; lang: string; model: string; feedback_model: string; effort: string;
   }) => request<SessionData>("/api/sessions", body),
   session: (id: string) => request<SessionData>(s(id)),
   packs: () => request<PackData[]>("/api/packs"),

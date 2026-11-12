@@ -23,7 +23,10 @@ ABBREVIATIONS = {
 }
 
 
-def claude_args(model: str, system_prompt: str, resume: str | None = None) -> list[str]:
+EFFORTS = ["default", "low", "medium", "high"]
+
+
+def claude_args(model: str, system_prompt: str, resume: str | None = None, effort: str | None = None) -> list[str]:
     args = [
         "claude", "-p",
         "--input-format", "stream-json",
@@ -36,6 +39,8 @@ def claude_args(model: str, system_prompt: str, resume: str | None = None) -> li
         "--setting-sources", "",
         "--strict-mcp-config",
     ]
+    if effort in EFFORTS[1:]:
+        args += ["--effort", effort]
     if resume:
         args += ["--resume", resume]
     return args
@@ -140,14 +145,14 @@ class Interviewer:
     """One Claude Code process per live session. Thread-safe `send`."""
 
     def __init__(self, cwd, model: str, system_prompt: str, resume: str | None,
-                 on_event: Callable[[str, dict], None]):
+                 on_event: Callable[[str, dict], None], effort: str | None = None):
         self.on_event = on_event
         self.lock = threading.Lock()
         self.busy = False
         self.queue: list[str] = []
         self.session_id = resume
         self.proc = subprocess.Popen(
-            claude_args(model, system_prompt, resume), cwd=cwd,
+            claude_args(model, system_prompt, resume, effort), cwd=cwd,
             stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
             text=True, bufsize=1,
         )
