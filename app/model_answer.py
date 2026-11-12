@@ -783,6 +783,10 @@ class Generation:
                            "severity": i.get("severity") if i.get("severity") in ("high", "medium", "low") else "medium",
                            "kind": i.get("kind") or "other", "issue": str(i.get("issue", ""))[:400],
                            "fix": str(i.get("fix", ""))[:400]})
+            # the fix round only edits scenes: the recorded narration can't change, so a person has to look
+            if issues[-1]["kind"] == "neutrality" or NARRATION.search(issues[-1]["issue"]):
+                narration.append({k: issues[-1][k] for k in ("issue", "fix", "severity", "kind")}
+                                 | {"issue": f"{i['scene']}: {issues[-1]['issue']}"})
         for sid, flagged in (self.state.get("scene_flags") or {}).items():
             for f in flagged:
                 issues.append({"scene": sid, "t": None, "severity": "high", "kind": "neutrality",
@@ -883,6 +887,10 @@ class Generation:
             self.state["chapters"] = chapters
         names = {"video": "MP4", "youtube": "YouTube text", "script": "script", "diagram_svg": "diagram"}
         self.stage("package", detail=", ".join(names[k] for k in names if k in outputs))
+
+
+# A QA issue about what is said (not drawn): only a person can change the recorded narration
+NARRATION = re.compile(r"narrat|voice|spoken|says\b|said\b|subtitle|audio|wording|sentence", re.I)
 
 
 # The work folder's render.mjs: scene workers may only run it, and only within their render rounds.

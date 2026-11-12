@@ -610,6 +610,13 @@ HARD = [
     "Earlier in this session you drew a queue.", "As you saw a moment ago, you put the cache first.",
     "Last time, the cache was left out.", "Olvidaste la caché.", "No mencionaste la caché.", "Te faltó la cola.",
     "Faltó mencionar la caché.", "Respondiste rápido.", "Hiciste bien en preguntar.",
+    "If you had added a cache earlier, reads would be fast.", "Remember when you put the cache first?",
+    "You put the cache after the database, which is backwards.", "Your first instinct was to shard.",
+    "You were right to add a queue.", "Good call on the queue earlier.", "You started with the API.",
+    "You correctly chose Postgres.", "Let's fix what you built.", "Recordemos que pusiste la caché.",
+    "Pusiste la caché delante.", "Esta vez no olvides la expiración.",
+    # 2nd-person preterite addressed to the viewer is about what they did (was on ALLOWED before)
+    "Elegiste Postgres, así que…",
     # interviews, mocks, sessions, scores
     "In interviews, people often skip estimates.", "A common mistake people make in interviews.", "A common pitfall in interviews",
     "This mock covers caching.", "Our mock went well.", "In this mock we design a cache.",
@@ -619,6 +626,7 @@ SOFT = [
     "In this session we design a cache.", "A common mistake is to skip estimates.", "The feedback was clear.",
     "A stronger answer would add a queue.", "Most people jump straight to the database.", "It was drawn on the board earlier.",
     "Un error común es olvidar la caché.", "Una mejor respuesta añade una cola.", "Then you put the queue between them.",
+    "Now you put a cache in front.",
 ]
 
 ALLOWED = [
@@ -632,7 +640,10 @@ ALLOWED = [
     "If you said yes to every request, the queue would grow.", "Cache misses fall through to the database.",
     "User interviews showed the pain.", "La entrevista de usuarios mostró el problema.", "Common mistakes when sharding.",
     "The training run takes hours.", "Add a practice session feature.", "This round of retries backs off.",
-    "Previous round of compaction freed space.", "You did the math.", "You covered reads.", "Elegiste Postgres, así que…",
+    "Previous round of compaction freed space.", "You did the math.", "You covered reads.",
+    "Suppose you put a cache in front.", "If you put a cache in front, reads get faster.", "Imagine you started from scratch.",
+    "If you had a million users, you'd shard.", "Si eliges Postgres, ganas transacciones.", "Supongamos que pones una caché.",
+    "La idea consiste en dividir.", "Existe una alternativa.", "No olvides poner una expiración.",
     "Say you chose Postgres for the links table.", "When you missed the cache, read the database.",
 ]
 
@@ -672,6 +683,18 @@ def test_soft_findings_get_one_revision_then_show_for_review(fake, done_session)
     assert "Review" not in yt and "100 then 200" not in yt
     qa = next(c for c in fake.calls if c["stage"] == "qa")
     assert "second look" in qa["prompt"] and "Most people jump" in qa["prompt"]
+
+
+def test_scene_qa_issues_about_narration_go_to_review(fake, done_session):
+    fake.qa_issues = [
+        {"scene": "s01", "t": 1.0, "severity": "medium", "kind": "mismatch", "issue": "The narration says 200 rps.", "fix": "x"},
+        {"scene": "s02", "t": 1.0, "severity": "high", "kind": "neutrality", "issue": "Chip reads 'nice try'.", "fix": "y"},
+        {"scene": "s02", "t": 2.0, "severity": "medium", "kind": "layout", "issue": "Chips overlap.", "fix": "z"}]
+    state, _ = run(done_session)
+    review = state["review"]
+    assert any(r.startswith("Review: s01: The narration says 200") for r in review)
+    assert any("s02: Chip reads 'nice try'" in r for r in review)
+    assert not any("Chips overlap" in r for r in review)  # a drawing issue: the fix round handles it
 
 
 def test_diagram_mode_shows_review_items(fake, done_session):

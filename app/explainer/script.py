@@ -145,6 +145,10 @@ TECH_CANDIDATE = re.compile(
 # What someone did or left out, said to them: always about an attempt (hypotheticals are excluded below)
 YOU_DID = (r"went|talked|mentioned|said|chose|drew|proposed|suggested|skipped|missed|forgot|jumped|focused|"
            r"spent|answered|struggled|ignored|overlooked|glossed|left out|nailed|got right|got wrong")
+ES_YOU_DID = ["pusiste", "elegiste", "escogiste", "empezaste", "comenzaste", "añadiste", "agregaste", "usaste", "diseñaste",
+              "construiste", "propusiste", "dibujaste", "mencionaste", "dijiste", "olvidaste", "respondiste", "hablaste",
+              "saltaste", "explicaste", "decidiste", "planteaste", "hiciste", "acertaste", "omitiste", "ignoraste",
+              "preguntaste", "calculaste", "separaste", "dividiste", "escribiste", "pensaste", "optaste"]
 NOT_HYPOTHETICAL = r"(?<!\bif )(?<!\bwhen )(?<!\bonce )(?<!\bas )(?<!\bsay )(?<!\bsuppose )(?<!\bimagine )(?<!\bassume )"
 
 PRACTICE = r"(mock|practice|design|coding|onsite|phone|system design|technical|behaviou?ral|hiring|job|interview)"
@@ -189,8 +193,15 @@ FORBIDDEN: list[tuple[str, str, bool]] = [
     (r"\bscore:?\s*\d+(\.\d+)?\s*(out of|/)\s*\d+", "mentions a score", True),
     (r"\b(in|during|at) (an |the |your |a |their )?interviews?\b(?! (with|of|for) )|\bmistakes? (people|engineers|candidates) "
      r"make\b", "mentions interviews or people's mistakes in them", True),
-    (r"\b(no )?(mencionaste|dijiste|olvidaste|dibujaste|propusiste|saltaste|hablaste|respondiste)\b|\bte (faltó|olvidaste|"
-     r"saltaste)\b|\bfaltó (hablar|mencionar|explicar|dibujar)\b|\bfuiste directo\b|\bhiciste bien en\b",
+    (NOT_HYPOTHETICAL + r"\byou put\b(?<!\bthen you put)(?<!\bnow you put)", "speaks to someone about what they did", True),
+    (r"\bif you had (\w+ed|built|drawn|chosen|taken|written|done|gone|begun|put|made|thought|said)\b|\bremember when you\b|"
+     r"\byour (first |initial )?instinct\b|\byou were (right|wrong|correct|smart|wise) (to|about|when)\b|\bgood call on\b|"
+     + NOT_HYPOTHETICAL + r"\byou (started|began|opened|correctly|rightly|wisely|cleverly|smartly|nicely)\b|\bwhat you (built|drew|wrote|designed|"
+     r"proposed|sketched|came up with|had)\b", "speaks to someone about what they did", True),
+    # Spanish: 2nd-person preterite of the verbs that describe someone's attempt (a list, not the -aste/-iste
+    # suffix: "consiste", "existe" are fine). Hypotheticals ("si eliges", "supongamos que pones") are present tense.
+    (r"\b(no )?(" + "|".join(ES_YOU_DID) + r")\b|\bte (faltó|olvidaste|saltaste|equivocaste)\b|\bfaltó (hablar|mencionar|"
+     r"explicar|dibujar)\b|\bfuiste directo\b|\bhiciste bien en\b|\besta vez,? no olvides\b|\brecordemos que (tú )?\w+aste\b",
      "speaks to someone about what they did (es)", True),
     # soft: ambiguous coaching and attempt language
     (r"\b(then|now),? you put\b", "speaks to someone about what they did", False),
