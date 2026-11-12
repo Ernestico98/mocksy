@@ -142,8 +142,10 @@ TECH_CANDIDATE = re.compile(
     r"servers?|search|rank\w*|re-?rank\w*|retriev\w*|filter\w*|scor\w*|matches|match|query|queries|"
     r"recommendations?|items?|solutions?|líder|elección|votos?|nodos?|claves?|réplicas?|servidor(es)?)\b", re.I)
 
-YOU_DID = (r"went|talked|mentioned|said|chose|drew|put|proposed|suggested|skipped|missed|forgot|jumped|focused|"
-           r"spent|answered|struggled|ignored|overlooked|glossed")
+# What someone did or left out, said to them: always about an attempt (hypotheticals are excluded below)
+YOU_DID = (r"went|talked|mentioned|said|chose|drew|proposed|suggested|skipped|missed|forgot|jumped|focused|"
+           r"spent|answered|struggled|ignored|overlooked|glossed|left out|nailed|got right|got wrong")
+NOT_HYPOTHETICAL = r"(?<!\bif )(?<!\bwhen )(?<!\bonce )(?<!\bas )(?<!\bsay )(?<!\bsuppose )(?<!\bimagine )(?<!\bassume )"
 
 PRACTICE = r"(mock|practice|design|coding|onsite|phone|system design|technical|behaviou?ral|hiring|job|interview)"
 
@@ -172,27 +174,37 @@ FORBIDDEN: list[tuple[str, str, bool]] = [
     (r"\b(la|esta|tu) ronda (anterior|pasada)\b|\ben (esta|la) ronda\b(?! de\b)", "mentions a round of an interview (es)", True),
     (r"\bsimulacros?\b|\bveredictos?\b|\btu (puntuación|nota|respuesta|diagrama|intento)\b|\bdecisión de contratación\b",
      "refers to the practice or a verdict (es)", True),
-    # soft: second person about what someone did, attempt and coaching language, practice words
-    (r"(?<!\bif )(?<!\bwhen )(?<!\bonce )(?<!\bas )\byou (just |really |also |then |first |quickly |already )?(" + YOU_DID
-     + r")\b", "speaks to someone about what they did", False),
-    (r"\byou (didn'?t|did not|never|forgot to|failed to) (mention|say|ask|explain|consider|discuss|talk|address)\w*\b",
-     "speaks to someone about what they did", False),
-    (r"\b(earlier|before|here|there|then|at first|a moment ago),? you (" + YOU_DID + r"|were|had)\b",
-     "speaks to someone about what they did", False),
-    (r"\bas you saw\b.{0,40}\byou (" + YOU_DID + r")\b", "speaks to someone about what they did", False),
+    # remarks about what the viewer did or left out
+    (NOT_HYPOTHETICAL + r"\byou (just |really |also |first |quickly |already )?(" + YOU_DID + r")\b",
+     "speaks to someone about what they did", True),
+    (r"\byou (didn'?t|did not|never|forgot to|failed to) (mention|say|ask|explain|consider|discuss|talk|address|cover|draw)\w*\b",
+     "speaks to someone about what they did", True),
+    (r"\b(earlier|before|here|there|at first|a moment ago|last time|earlier in this session|earlier on),? you\b",
+     "speaks to someone about what they did", True),
+    (r"\bas you saw\b.{0,40}\byou (put|" + YOU_DID + r")\b", "speaks to someone about what they did", True),
+    (r"\blast time\b.{0,60}\b(left out|missed|forgot(ten)?|skipped|omitted|overlooked)\b", "talks about a previous attempt", True),
+    (r"\b(this|our|that|your|the last|last|previous|today'?s) mock\b(?! (server|object|service|data|api|implementation|"
+     r"endpoint|client)s?\b)", "mentions a mock round", True),
+    (r"\b(this|the|our|your|today'?s|last) session (went|got|was going|ended|started|derailed)\b", "talks about the session", True),
+    (r"\bscore:?\s*\d+(\.\d+)?\s*(out of|/)\s*\d+", "mentions a score", True),
+    (r"\b(in|during|at) (an |the |your |a |their )?interviews?\b(?! (with|of|for) )|\bmistakes? (people|engineers|candidates) "
+     r"make\b", "mentions interviews or people's mistakes in them", True),
+    (r"\b(no )?(mencionaste|dijiste|olvidaste|dibujaste|propusiste|saltaste|hablaste|respondiste)\b|\bte (faltó|olvidaste|"
+     r"saltaste)\b|\bfaltó (hablar|mencionar|explicar|dibujar)\b|\bfuiste directo\b|\bhiciste bien en\b",
+     "speaks to someone about what they did (es)", True),
+    # soft: ambiguous coaching and attempt language
+    (r"\b(then|now),? you put\b", "speaks to someone about what they did", False),
     (r"\ba (stronger|better|weaker|weak|strong|great|solid|complete|perfect) answer\b|\bthe (best|ideal|right) answer\b",
      "frames the content as an answer to be judged", False),
     (r"\bmost (people|engineers|folks|candidates) (jump|go|rush|start|forget|miss|skip)\w*\b", "coaching language", False),
     (r"\b(on|to|from) the (white)?board\b|\bdrawn on the board\b", "refers to a whiteboard", False),
-    (r"\b(in|during|for|at) (an |the |your |a )?interviews?\b(?! with)|\binterviewing\b", "mentions interviews", False),
+    (r"\binterviewing\b", "mentions interviews", False),
     (r"\b(a|the) (common|typical|classic|frequent|big|biggest) mistake (is|here|people)\b|\bpeople'?s? mistakes?\b",
      "talks about people's mistakes", False),
     (r"\b(this|that|today'?s|our|your|last|previous) sessions?\b(?! (token|store|cookie|id|state|affinity|key|data|storage|"
      r"timeout|layer|cache|table|replay|ticket|service|feature|expir\w*)s?\b)", "mentions the session", False),
     (r"\b(your|my|the interviewer'?s|interview) feedback\b|\bthe feedback (said|says|was|noted|mentioned)\b",
      "mentions feedback on an attempt", False),
-    (r"\b(no )?(mencionaste|dijiste|olvidaste|dibujaste|propusiste|saltaste|hablaste|respondiste)\b|\bte (faltó|olvidaste|"
-     r"saltaste)\b|\bfaltó (hablar|mencionar|explicar)\b|\bfuiste directo\b", "speaks to someone about what they did (es)", False),
     (r"\buna (mejor|buena|gran|peor) respuesta\b|\bla respuesta (ideal|correcta)\b", "frames the content as an answer (es)", False),
     (r"\b(un|el) error (común|típico|habitual) (es|aquí)\b|\btus errores\b", "talks about people's mistakes (es)", False),
 ]
@@ -299,7 +311,7 @@ def chapters(script: dict, timings: dict) -> list[tuple[str, str]]:
     return out
 
 
-def markdown(script: dict, diagram_file: str | None = "diagram.svg") -> str:
+def markdown(script: dict, diagram_file: str | None = "diagram.svg", review: list[str] | None = None) -> str:
     out = [f"# {script['title']}", "", script.get("description", "").strip(), ""]
     if diagram_file:
         out += [f"![{script.get('diagram', {}).get('title', 'Solution diagram')}]({diagram_file})", ""]
@@ -307,6 +319,9 @@ def markdown(script: dict, diagram_file: str | None = "diagram.svg") -> str:
         out += [f"## {i}. {s['title']}", "", " ".join(b["say"].strip() for b in s["beats"]), ""]
     if script.get("assumptions"):
         out += ["## Assumed figures", "", *[f"- {a}" for a in script["assumptions"]], ""]
+    if review:
+        out += ["## Review before publishing", "", "Flagged by the automatic checks; edit or confirm before sharing.", "",
+                *[f"- {r}" for r in review], ""]
     return "\n".join(out).rstrip() + "\n"
 
 
