@@ -74,6 +74,23 @@ export interface Message {
   heard?: string;
   audio?: Record<string, string>;
   by?: string;
+  /** candidate turns: how long the interviewer took to answer, per stage (see app/latency.py) */
+  latency?: Latency;
+}
+
+export interface Latency {
+  kind: string;
+  silence_ms?: number;
+  upload_ms?: number;
+  stt_ms?: number;
+  handoff_ms?: number;
+  model_ms?: number;
+  chunk_ms?: number;
+  tts_ms?: number;
+  play_ms?: number;
+  total_ms?: number;
+  total_to?: "played" | "tts_ready";
+  tools_before_speech?: number;
 }
 
 export interface Feedback {
@@ -158,13 +175,20 @@ export const api = {
   interrupt: (id: string, message_id: number, heard_index: number) =>
     request(`${s(id)}/interrupt`, { message_id, heard_index }),
   activity: (id: string, speaking: boolean) => request(`${s(id)}/activity`, { speaking }),
+  played: (id: string, message_id: number, index: number, at: number) =>
+    request(`${s(id)}/played`, { message_id, index, at }),
   canvas: (id: string, body: { lines: string[]; png: string | null; scene: string }) => request(`${s(id)}/canvas`, body),
   end: (id: string) => request(`${s(id)}/end`, {}),
   stop: (id: string) => request(`${s(id)}/stop`, {}),
   resume: (id: string) => request(`${s(id)}/resume`, {}),
-  async transcribe(id: string, wav: Blob): Promise<string> {
+  /** `timing`: when the VAD ended the turn (epoch s) and the pause it waited, for latency stats. */
+  async transcribe(id: string, wav: Blob, timing?: { vadAt: number; silenceMs: number }): Promise<string> {
     const fd = new FormData();
     fd.append("audio", wav, "turn.wav");
+    if (timing) {
+      fd.append("vad_at", String(timing.vadAt));
+      fd.append("silence_ms", String(Math.round(timing.silenceMs)));
+    }
     const r = await fetch(`${s(id)}/transcribe`, { method: "POST", body: fd });
     if (!r.ok) throw new Error(await r.text());
     return ((await r.json()) as { text: string }).text;

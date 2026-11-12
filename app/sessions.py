@@ -17,6 +17,7 @@ import soundfile as sf
 from . import speech
 from .config import LANGUAGES, PROMPTS, SESSIONS, load_settings
 from .interviewer import Interviewer
+from .latency import Turn
 from .packs import get_pack
 
 # How long the candidate must draw without talking before the interviewer may chime in.
@@ -51,6 +52,9 @@ class Session:
         self.last_silent_prompt = 0.0
         self.last_turn_end = time.time()
         self.candidate_speaking = False
+        self.stt_marks: dict[str, dict] = {}  # transcript → timing of its upload + STT
+        self.turn: Turn | None = None          # latency of the candidate turn being answered
+        self.turn_msg: dict | None = None
         if self.meta.get("status") == "live":  # server restarted mid-interview
             threading.Thread(target=self.watchdog, daemon=True).start()
 
@@ -139,11 +143,20 @@ class Session:
     def on_interviewer(self, kind: str, data: dict):
         val = data.get("value")
         with self.lock:
+            t = self.turn if self.turn and (kind == "turn_start" or self.turn.has("sent")) else None
             if kind == "turn_start":
                 self.current = None
                 self.status("thinking")
+                if t:
+                    t.mark("sent")
+            elif kind == "first_text":
+                if t:
+                    t.mark("first_text")
             elif kind == "speech":
                 msg = self._current()
+                if t and not t.has("first_chunk"):
+                    t.mark("first_chunk")
+                    t.reply_id, t.chunk_chars = msg["id"], len(val)
                 msg["chunks"].append(val)
                 msg["text"] = " ".join(msg["chunks"])
                 if not msg.get("interrupted"):
@@ -157,6 +170,8 @@ class Session:
                 self.end_requested = True
             elif kind == "tool":
                 self.status("tool", val or "")
+                if t and not t.has("first_chunk"):
+                    t.tools += 1
             elif kind == "session":
                 if self.meta.get("claude_session_id") != val:
                     self.meta["claude_session_id"] = val
@@ -170,6 +185,9 @@ class Session:
                     self.update(self.current)
                 self.current = None
                 self.status("idle")
+                if t and not t.has("first_chunk"):  # nothing to say (<silent/>) or an error
+                    self._publish_latency(log=True)
+                    self.turn = None
                 if self.end_requested:
                     threading.Thread(target=self.finish, daemon=True).start()
             elif kind == "error":
@@ -188,8 +206,9 @@ class Session:
         text = text.strip()
         if not text or self.meta.get("status") != "live":
             return
-        self.add("candidate", kind, text)
+        msg = self.add("candidate", kind, text)
         self.last_candidate = time.time()
+        self._track_turn(msg, self.stt_marks.pop(text, None) if kind == "speech" else None)
         header = "[candidate typed" if kind == "typed" else "[candidate"
         parts = self.pending + self._canvas_diff()
         self.pending = []
@@ -200,8 +219,9 @@ class Session:
     def ask_to_look(self, text: str):
         if not self.whiteboard:
             return self.say(text, "typed")
-        self.add("candidate", "look", text or "(asks you to look at the whiteboard)")
+        msg = self.add("candidate", "look", text or "(asks you to look at the whiteboard)")
         self.last_candidate = time.time()
+        self._track_turn(msg, None)
         parts = self.pending + self._canvas_diff(force=True)
         self.pending = []
         parts.append(f"[candidate · {self.clock()}]\n{text or 'Can you take a look at my whiteboard?'}\n"
@@ -221,6 +241,45 @@ class Session:
             self.update(msg)
             self.pending.append(f'[interrupted] The candidate started talking while you were speaking. '
                                 f'They heard: "{heard}"')
+
+    # ---------------------------------------------------------------- latency
+    def record_stt(self, text: str, marks: dict, silence_ms: float | None):
+        """Timing of a transcription, picked up by `say` when the browser sends that text."""
+        if len(self.stt_marks) > 8:
+            self.stt_marks.clear()
+        self.stt_marks[text.strip()] = {"marks": marks, "silence_ms": silence_ms}
+
+    def _track_turn(self, msg: dict, stt: dict | None):
+        with self.lock:
+            if self.turn and not self.turn.logged and self.turn_msg:
+                self._publish_latency(log=True)  # the previous reply never reported playback
+            marks = (stt or {}).get("marks") or {"received": msg["ts"]}
+            self.turn = Turn(msg["kind"], marks, (stt or {}).get("silence_ms"))
+            self.turn_msg = msg
+
+    def _publish_latency(self, log: bool = False):
+        t, msg = self.turn, self.turn_msg
+        if not t or not msg:
+            return
+        msg["latency"] = t.summary()
+        self.update(msg)
+        if log and not t.logged:
+            t.log(self.id, msg["id"])
+
+    def tts_ready(self, message_id: int, index: int):
+        with self.lock:
+            t = self.turn
+            if t and index == 0 and t.reply_id == message_id and not t.has("tts_ready"):
+                t.mark("tts_ready")
+                self._publish_latency()
+
+    def played(self, message_id: int, index: int, at: float | None):
+        """The browser started playing a clip: closes the latency record of the turn it answers."""
+        with self.lock:
+            t = self.turn
+            if t and index == 0 and t.reply_id == message_id and not t.has("played"):
+                t.mark("played", at if at and abs(at - time.time()) < 60 else None)
+                self._publish_latency(log=True)
 
     # ---------------------------------------------------------------- canvas
     def update_canvas(self, lines: list[str], png: str | None, scene: str | None):
@@ -471,6 +530,7 @@ def _tts_worker():
                 msg.setdefault("audio", {})[str(index)] = url
                 s.save()
         s.broadcast({"type": "audio", "message_id": msg_id, "index": index, "url": url})
+        s.tts_ready(msg_id, index)
 
 
 threading.Thread(target=_tts_worker, daemon=True).start()

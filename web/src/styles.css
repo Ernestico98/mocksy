@@ -119,6 +119,7 @@ fieldset.field legend { padding: 0; margin-bottom: 6px; }
 @keyframes blink { 50% { opacity: 0; } }
 
 .composer { border-top: 1px solid var(--line); padding: 10px 12px 12px; display: grid; gap: 10px; background: var(--panel); }
+.latency { font-variant-numeric: tabular-nums; line-height: 1.5; }
 .status-line { font-size: 12.5px; color: var(--muted); display: flex; align-items: center; gap: 7px; min-height: 18px; }
 .dot { width: 8px; height: 8px; border-radius: 50%; background: #c8c6bf; flex: none; }
 .dot.live { background: var(--rec); animation: pulse 1s infinite; }

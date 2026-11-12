@@ -39,6 +39,8 @@ class FakeInterviewer:
     # helper: replay what the real parser would emit for one assistant turn
     def reply(self, *events):
         self.on_event("turn_start", {})
+        if events:
+            self.on_event("first_text", {})
         for kind, value in events:
             self.on_event(kind, {"value": value})
         self.on_event("turn_end", {"value": 0.001})

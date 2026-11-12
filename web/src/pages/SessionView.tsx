@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore, type FormEvent } from "react";
-import { api, subscribe, type AppMeta, type Feedback, type Message, type SessionMeta } from "../api";
+import { api, subscribe, type AppMeta, type Feedback, type Latency, type Message, type SessionMeta } from "../api";
 import { useConfirm } from "../components/Confirm";
 import FeedbackPanel from "../components/FeedbackPanel";
 import Transcript from "../components/Transcript";
@@ -40,6 +40,7 @@ export default function SessionView({ id, meta: app }: { id: string; meta: AppMe
   const [micError, setMicError] = useState("");
   const [synced, setSynced] = useState<Date | null>(null);
   const [error, setError] = useState("");
+  const [debug, setDebug] = useState(() => new URLSearchParams(location.search).has("debug") || store.get("latencyDebug", "") === "1");
 
   const board = useRef<WhiteboardHandle>(null);
   const mic = useRef<Mic>(null as unknown as Mic);
@@ -134,11 +135,12 @@ export default function SessionView({ id, meta: app }: { id: string; meta: AppMe
       }
       void api.activity(id, true).catch(() => {});
     };
-    m.onUtterance = async (wav) => {
+    m.onUtterance = async (wav, { silenceMs }) => {
+      const vadAt = Date.now() / 1000;
       void api.activity(id, false).catch(() => {});
       setTranscribing(true);
       try {
-        const text = await api.transcribe(id, wav);
+        const text = await api.transcribe(id, wav, { vadAt, silenceMs });
         if (!text) { setNotice("Didn't catch that — please say it again."); return; }
         await board.current?.sync();  // the interviewer gets the latest drawing with what you said
         await api.say(id, text);
@@ -148,6 +150,13 @@ export default function SessionView({ id, meta: app }: { id: string; meta: AppMe
         setTranscribing(false);
       }
     };
+    // first clip of a reply starts playing: closes that turn's latency record
+    player.onStart = (clip) => {
+      if (clip.index === 0 && metaRef.current?.status === "live") {
+        void api.played(id, clip.message_id, clip.index, Date.now() / 1000).catch(() => {});
+      }
+    };
+    return () => { player.onStart = () => {}; };
   }, [id]);
 
   const enableMic = useCallback(async () => {
@@ -242,6 +251,7 @@ export default function SessionView({ id, meta: app }: { id: string; meta: AppMe
       <Header
         meta={meta} app={app} live={live} onBack={back} onEnd={end} onStop={stop} onResume={resume} onPhase={changePhase}
         onEndSilence={(ms) => { mic.current.endSilenceMs = ms; store.set("endSilence", String(ms)); }}
+        debug={debug} onDebug={(on) => { setDebug(on); store.set("latencyDebug", on ? "1" : ""); }}
       />
       <main className={`workspace${hasBoard ? "" : " solo"}`}>
         <aside className="side">
@@ -262,6 +272,7 @@ export default function SessionView({ id, meta: app }: { id: string; meta: AppMe
               {live && (
                 <div className="composer">
                   <div className="status-line"><span className={`dot ${status.dot}`} /><span>{status.text}</span></div>
+                  {debug && <LatencyReadout messages={messages} />}
                   <div className="mic-row">
                     <MicButton state={micState} level={level} onClick={micAction} />
                     <MicHelp state={micState} mode={mic.current.mode} />
@@ -295,9 +306,10 @@ export default function SessionView({ id, meta: app }: { id: string; meta: AppMe
 
 // ------------------------------------------------------------------ header
 
-function Header({ meta, app, live, onBack, onEnd, onStop, onResume, onPhase, onEndSilence }: {
+function Header({ meta, app, live, onBack, onEnd, onStop, onResume, onPhase, onEndSilence, debug, onDebug }: {
   meta: SessionMeta; app: AppMeta; live: boolean;
   onBack: () => void; onEnd: () => void; onStop: () => void; onResume: () => void; onPhase: (key: string, label: string) => void; onEndSilence: (ms: number) => void;
+  debug: boolean; onDebug: (on: boolean) => void;
 }) {
   const now = useNow(500);
   const [open, setOpen] = useState(false);
@@ -330,7 +342,7 @@ function Header({ meta, app, live, onBack, onEnd, onStop, onResume, onPhase, onE
       {live && (
         <div className="settings-wrap">
           <button className="icon-btn" onClick={() => setOpen((o) => !o)} title="Voice settings" aria-expanded={open}>⚙</button>
-          {open && <VoiceSettings meta={meta} app={app} onEndSilence={onEndSilence} onClose={() => setOpen(false)} />}
+          {open && <VoiceSettings meta={meta} app={app} onEndSilence={onEndSilence} debug={debug} onDebug={onDebug} onClose={() => setOpen(false)} />}
         </div>
       )}
       {live && <button className="btn" onClick={onStop} title="Pause: end without an evaluation, resume later">Stop</button>}
@@ -342,8 +354,8 @@ function Header({ meta, app, live, onBack, onEnd, onStop, onResume, onPhase, onE
   );
 }
 
-function VoiceSettings({ meta, app, onEndSilence, onClose }: {
-  meta: SessionMeta; app: AppMeta; onEndSilence: (ms: number) => void; onClose: () => void;
+function VoiceSettings({ meta, app, onEndSilence, debug, onDebug, onClose }: {
+  meta: SessionMeta; app: AppMeta; onEndSilence: (ms: number) => void; debug: boolean; onDebug: (on: boolean) => void; onClose: () => void;
 }) {
   const key = meta.lang === "es" ? "voice_es" : "voice_en";
   const prefixes = meta.lang === "es" ? ["ef", "em"] : ["af", "am", "bf", "bm"];
@@ -374,6 +386,34 @@ function VoiceSettings({ meta, app, onEndSilence, onClose }: {
           <option value="3000">Very long (3 s)</option>
         </select>
       </label>
+      <label className="toggle field">
+        <input type="checkbox" checked={debug} onChange={(e) => onDebug(e.target.checked)} />
+        Show response times
+      </label>
+    </div>
+  );
+}
+
+// ------------------------------------------------------------------ latency readout (debug)
+
+const STAGE_LABELS: [keyof Latency, string][] = [
+  ["silence_ms", "pause"], ["upload_ms", "upload"], ["stt_ms", "STT"], ["handoff_ms", "handoff"],
+  ["model_ms", "model"], ["chunk_ms", "1st chunk"], ["tts_ms", "TTS"], ["play_ms", "play"],
+];
+
+/** The last answered turn: how long from the end of your speech to the interviewer's first audio. */
+function LatencyReadout({ messages }: { messages: Message[] }) {
+  const last = [...messages].reverse().find((m) => m.role === "candidate" && m.latency)?.latency;
+  if (!last) return <div className="latency small muted">Response times appear after your next turn.</div>;
+  const s = (ms?: number) => (ms === undefined ? "–" : (ms / 1000).toFixed(2));
+  const heard = last.total_ms !== undefined ? (last.silence_ms ?? 0) + last.total_ms : undefined;
+  return (
+    <div className="latency small muted" title="End of your speech → interviewer's first audio, per stage (seconds)">
+      <b>{s(heard)} s</b>{last.total_to === "tts_ready" && " (until audio ready)"}
+      {STAGE_LABELS.filter(([k]) => last[k] !== undefined).map(([k, label]) => (
+        <span key={k}> · {label} {s(last[k] as number)}</span>
+      ))}
+      {!!last.tools_before_speech && <span> · {last.tools_before_speech} tool call(s) first</span>}
     </div>
   );
 }

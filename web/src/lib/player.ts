@@ -11,6 +11,8 @@ class Player {
   private blocked: Clip | null = null;
   current: Clip | null = null;
   needsGesture = false;
+  /** Called when a clip actually starts playing (latency stats). */
+  onStart: (clip: Clip) => void = () => {};
   private listeners = new Set<Listener>();
 
   constructor() {
@@ -71,6 +73,7 @@ class Player {
       done = true;
       this.next();
     };
+    audio.onplaying = () => { if (this.audio === audio) this.onStart(clip); };
     audio.onended = go;
     audio.onerror = go;           // missing/broken clip: skip, never retry
     audio.play().catch((e: DOMException) => {

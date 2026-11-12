@@ -114,6 +114,7 @@ class Interviewer:
             text=True, bufsize=1,
         )
         self.parser: TagStream | None = None
+        self.got_text = False
         threading.Thread(target=self._read, daemon=True).start()
         threading.Thread(target=self._drain_stderr, daemon=True).start()
 
@@ -127,6 +128,7 @@ class Interviewer:
 
     def _write(self, text: str):
         self.busy = True
+        self.got_text = False
         self.parser = TagStream(lambda kind, val: self.on_event(kind, {"value": val}))
         self.on_event("turn_start", {})
         msg = {"type": "user", "message": {"role": "user", "content": [{"type": "text", "text": text}]}}
@@ -159,6 +161,9 @@ class Interviewer:
             elif t == "stream_event":
                 e = ev["event"]
                 if e.get("type") == "content_block_delta" and e["delta"].get("type") == "text_delta":
+                    if not self.got_text:
+                        self.got_text = True
+                        self.on_event("first_text", {})
                     self.parser.feed(e["delta"]["text"])
                 elif e.get("type") == "content_block_start" and e["content_block"].get("type") in ("tool_use", "server_tool_use"):
                     self.on_event("tool", {"value": e["content_block"].get("name")})

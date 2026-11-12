@@ -24,7 +24,8 @@ export class Mic {
   onLevel: (level: number) => void = () => {};
   onState: (state: MicState) => void = () => {};
   onSpeechStart: () => void = () => {};
-  onUtterance: (wav: Blob) => void = () => {};
+  /** `silenceMs`: the trailing pause waited before ending the turn (0 for push-to-talk). */
+  onUtterance: (wav: Blob, info: { silenceMs: number }) => void = () => {};
 
   private stream: MediaStream | null = null;
   private ctx: AudioContext | null = null;
@@ -157,7 +158,7 @@ export class Mic {
     this.loudMs = 0;
     this.set(this.mode === "ptt" ? "ready" : "listening");
     if (!frames || this.speechMs < (manual ? 200 : 350)) return; // too short to be speech
-    this.onUtterance(encodeWav(frames, this.rate));
+    this.onUtterance(encodeWav(frames, this.rate), { silenceMs: manual ? 0 : this.quietMs });
   }
 }
 

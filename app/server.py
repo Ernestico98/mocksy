@@ -3,12 +3,13 @@
 import asyncio
 import json
 import tempfile
+import time
 from contextlib import asynccontextmanager
 from pathlib import Path
 
 from typing import Any
 
-from fastapi import FastAPI, File, HTTPException, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -227,7 +228,10 @@ def look(sid: str, body: SayIn):
 
 
 @app.post("/api/sessions/{sid}/transcribe")
-async def transcribe(sid: str, audio: UploadFile = File(...)):
+async def transcribe(sid: str, audio: UploadFile = File(...), vad_at: float | None = Form(None),
+                     silence_ms: float | None = Form(None)):
+    """`vad_at` (epoch seconds) and `silence_ms` come from the browser's VAD, for latency stats."""
+    received = time.time()
     s = get(sid)
     suffix = Path(audio.filename or "a.wav").suffix or ".wav"
     with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as f:
@@ -236,6 +240,8 @@ async def transcribe(sid: str, audio: UploadFile = File(...)):
         text = await asyncio.to_thread(speech.transcribe, f.name, s.lang)
     finally:
         Path(f.name).unlink(missing_ok=True)
+    if text:
+        s.record_stt(text, {"vad": vad_at, "received": received, "stt_done": time.time()}, silence_ms)
     return {"text": text}
 
 
@@ -279,6 +285,18 @@ class InterruptIn(BaseModel):
 @app.post("/api/sessions/{sid}/interrupt")
 def interrupt(sid: str, body: InterruptIn):
     get(sid).interrupt(body.message_id, body.heard_index)
+    return {"ok": True}
+
+
+class PlayedIn(BaseModel):
+    message_id: int
+    index: int = 0
+    at: float | None = None  # epoch seconds, when playback started in the browser
+
+
+@app.post("/api/sessions/{sid}/played")
+def played(sid: str, body: PlayedIn):
+    get(sid).played(body.message_id, body.index, body.at)
     return {"ok": True}
 
 
