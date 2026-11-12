@@ -5,8 +5,16 @@ export interface Clip { message_id: number; index: number; url: string }
 
 type Listener = () => void;
 
+// Fetch and decode a clip as soon as it's queued, so the next one starts without a gap.
+function load(clip: Clip) {
+  const audio = new Audio();
+  audio.preload = "auto";
+  audio.src = clip.url;
+  return { clip, audio };
+}
+
 class Player {
-  private queue: Clip[] = [];
+  private queue: { clip: Clip; audio: HTMLAudioElement }[] = [];
   private audio: HTMLAudioElement | null = null;
   private blocked: Clip | null = null;
   current: Clip | null = null;
@@ -29,7 +37,7 @@ class Player {
   private emit() { this.listeners.forEach((l) => l()); }
 
   enqueue(clip: Clip) {
-    this.queue.push(clip);
+    this.queue.push(load(clip));
     if (!this.current) this.next();
   }
 
@@ -37,11 +45,12 @@ class Player {
     this.stop();
     Object.entries(audio)
       .sort((a, b) => +a[0] - +b[0])
-      .forEach(([index, url]) => this.queue.push({ message_id, index: +index, url }));
+      .forEach(([index, url]) => this.queue.push(load({ message_id, index: +index, url })));
     this.next();
   }
 
   stop() {
+    this.queue.forEach((q) => q.audio.removeAttribute("src"));
     this.queue = [];
     this.blocked = null;
     const a = this.audio;
@@ -53,7 +62,7 @@ class Player {
 
   private resume() {
     if (this.blocked && !this.current) {
-      this.queue.unshift(this.blocked);
+      this.queue.unshift(load(this.blocked));
       this.blocked = null;
       this.needsGesture = false;
       this.next();
@@ -61,9 +70,9 @@ class Player {
   }
 
   private next() {
-    const clip = this.queue.shift();
-    if (!clip) { this.current = null; this.audio = null; this.emit(); return; }
-    const audio = new Audio(clip.url);
+    const item = this.queue.shift();
+    if (!item) { this.current = null; this.audio = null; this.emit(); return; }
+    const { clip, audio } = item;
     this.audio = audio;
     this.current = clip;
     this.emit();
