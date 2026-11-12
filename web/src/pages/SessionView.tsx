@@ -52,6 +52,7 @@ export default function SessionView({ id, meta: app }: { id: string; meta: AppMe
   messagesRef.current = messages;
   const metaRef = useRef(meta);
   metaRef.current = meta;
+  const unheard = useRef(new Set<number>());
 
   const current = useSyncExternalStore((cb) => player.subscribe(cb), () => player.current);
   const needsGesture = useSyncExternalStore((cb) => player.subscribe(cb), () => player.needsGesture);
@@ -87,8 +88,14 @@ export default function SessionView({ id, meta: app }: { id: string; meta: AppMe
         case "audio": {
           const m = messagesRef.current.find((x) => x.id === ev.message_id);
           if (m) upsert({ ...m, audio: { ...(m.audio || {}), [ev.index]: ev.url } });
-          if (metaRef.current?.status === "live" && !m?.interrupted && mic.current.state !== "speaking") {
+          if (metaRef.current?.status !== "live" || m?.interrupted) break;
+          if (mic.current.state !== "speaking") {
             player.enqueue({ message_id: ev.message_id, index: ev.index, url: ev.url });
+          } else if (!player.current && !unheard.current.has(ev.message_id)) {
+            // the reply arrived while the candidate is still talking (e.g. after a short pause):
+            // drop it and tell the interviewer what they actually heard (the clips before this one)
+            unheard.current.add(ev.message_id);
+            void api.interrupt(id, ev.message_id, ev.index - 1).catch(() => {});
           }
           break;
         }

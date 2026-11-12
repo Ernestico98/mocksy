@@ -239,8 +239,12 @@ class Session:
             msg["interrupted"] = True
             msg["heard"] = heard
             self.update(msg)
-            self.pending.append(f'[interrupted] The candidate started talking while you were speaking. '
-                                f'They heard: "{heard}"')
+            if heard:
+                self.pending.append(f'[interrupted] The candidate started talking while you were speaking. '
+                                    f'They heard: "{heard}"')
+            else:  # heard_index -1: they were still talking when the reply arrived
+                self.pending.append("[interrupted] The candidate kept talking before your reply reached them, "
+                                    "so they didn't hear any of it.")
 
     # ---------------------------------------------------------------- latency
     def record_stt(self, text: str, marks: dict, silence_ms: float | None):

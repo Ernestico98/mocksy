@@ -165,6 +165,16 @@ def test_interrupt_records_what_was_heard_and_cancels_tts(session):
     assert '[interrupted]' in sent and 'They heard: "First sentence here, quite long."' in sent
 
 
+def test_reply_that_arrives_while_the_candidate_still_talks_is_dropped(session):
+    it = interviewer(session)
+    it.reply(("speech", "An answer to half a thought, nobody heard."))
+    msg = next(m for m in session.messages if m["role"] == "interviewer")
+    session.interrupt(msg["id"], heard_index=-1)
+    assert msg["interrupted"] and msg["heard"] == ""
+    session.say("...and the second half of my thought.")
+    assert "didn't hear any of it" in it.sent[-1] and 'They heard: ""' not in it.sent[-1]
+
+
 def test_speech_after_interrupt_is_not_spoken(session):
     it = interviewer(session)
     it.on_event("turn_start", {})
