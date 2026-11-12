@@ -13,6 +13,14 @@ from typing import Callable
 
 TOOLS = ["Read", "Write", "Edit", "WebSearch", "WebFetch"]
 SENTENCE_END = re.compile(r"[.!?…:;](?=\s)|\n")
+CLAUSE_END = re.compile(r"[,;:—–](?=\s)")
+MIN_SENTENCE_CHARS = 25   # shorter sentences ("Okay.") stay with the next one, so audio isn't choppy
+MIN_CLAUSE_WORDS = 6      # the first chunk of a reply may end at a comma once it has this many words
+# A period after these is not the end of a sentence ("e.g. caching", "Dr. Smith", "p. ej.")
+ABBREVIATIONS = {
+    "e.g.", "i.e.", "vs.", "dr.", "mr.", "mrs.", "ms.", "prof.", "st.", "approx.", "fig.",
+    "sr.", "sra.", "srta.", "dra.", "ej.", "p.", "pág.", "aprox.", "núm.", "ud.", "uds.",
+}
 
 
 def claude_args(model: str, system_prompt: str, resume: str | None = None) -> list[str]:
@@ -43,6 +51,7 @@ class TagStream:
         self.emit = emit
         self.buf = ""       # raw text not yet classified
         self.speech = ""    # speech text waiting for a sentence boundary
+        self.spoken = False  # a chunk was emitted already (the first one may be a clause)
 
     def feed(self, text: str):
         self.buf += text
@@ -76,19 +85,48 @@ class TagStream:
     def _speech(self, text: str):
         self.speech += text
         while True:
-            # cut at the first sentence end, but keep very short fragments
-            # ("Okay.") together with the next sentence so audio isn't choppy
-            cut = next((m.end() for m in SENTENCE_END.finditer(self.speech)
-                        if m.end() >= 25 or m.group() == "\n"), None)
+            cut = self._cut()
             if cut is None:
                 break
             chunk, self.speech = self.speech[:cut], self.speech[cut:]
-            if chunk.strip():
-                self.emit("speech", chunk.strip())
+            self._emit_speech(chunk)
+
+    def _cut(self) -> int | None:
+        """Where the next speakable chunk ends: the first full sentence, or for the first chunk
+        of a reply, an earlier clause (comma, colon...) so synthesis can start sooner."""
+        s = self.speech
+        ends = [m for m in SENTENCE_END.finditer(s) if m.group() == "\n" or self._sentence_end(s, m)]
+        if not self.spoken:
+            ends += [m for m in CLAUSE_END.finditer(s) if self._clause_end(s, m)]
+            ends.sort(key=lambda m: m.end())
+        return next((m.end() for m in ends), None)
+
+    @staticmethod
+    def _sentence_end(s: str, m: re.Match) -> bool:
+        if m.end() < MIN_SENTENCE_CHARS:
+            return False
+        if m.group() == ".":
+            word = s[:m.end()].rsplit(None, 1)[-1].lstrip("¿¡(\"'").lower()
+            if word in ABBREVIATIONS or re.fullmatch(r"(?:[a-z]\.)+", word):  # "e.g.", "U.S.", "J."
+                return False
+        return True
+
+    @staticmethod
+    def _clause_end(s: str, m: re.Match) -> bool:
+        head = s[:m.end()]
+        if len(head.split()) < MIN_CLAUSE_WORDS:
+            return False
+        # never inside an open Spanish question/exclamation or a parenthesis: it would change the intonation
+        return (head.count("¿") <= head.count("?") and head.count("¡") <= head.count("!")
+                and head.count("(") <= head.count(")"))
+
+    def _emit_speech(self, chunk: str):
+        if chunk.strip():
+            self.spoken = True
+            self.emit("speech", chunk.strip())
 
     def _flush_speech(self):
-        if self.speech.strip():
-            self.emit("speech", self.speech.strip())
+        self._emit_speech(self.speech)
         self.speech = ""
 
     def close(self):

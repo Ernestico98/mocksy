@@ -51,7 +51,67 @@ def test_speech_before_a_tag_is_emitted_first():
 
 def test_literal_less_than_is_spoken():
     out = run("Latency should stay under 300 ms, so p99 < 300 is the goal here.")
-    assert out == [("speech", "Latency should stay under 300 ms, so p99 < 300 is the goal here.")]
+    assert out == [("speech", "Latency should stay under 300 ms,"), ("speech", "so p99 < 300 is the goal here.")]
+
+
+@pytest.mark.parametrize("step", [1, 4, 100])
+def test_first_chunk_ends_at_a_clause_then_whole_sentences(step):
+    out = run("That makes sense for the read path, but what happens when a cache node goes down, "
+              "and the traffic shifts to the database? Walk me through it, step by step.", step)
+    assert out == [
+        ("speech", "That makes sense for the read path,"),
+        ("speech", "but what happens when a cache node goes down, and the traffic shifts to the database?"),
+        ("speech", "Walk me through it, step by step."),
+    ]
+
+
+def test_short_lead_in_is_not_cut_at_its_comma():
+    assert run("Okay, sure. Let's talk about the storage layer then.") == [
+        ("speech", "Okay, sure. Let's talk about the storage layer then."),
+    ]
+
+
+def test_clause_cut_is_only_for_the_first_chunk_after_a_tool_call_too():
+    out = []
+    p = TagStream(lambda kind, value: out.append((kind, value)))
+    p.feed("Thanks, I've written that down for later.")
+    p.close()  # a tool call happens here
+    p.feed(" So for the write path, how would you keep the counters consistent across regions?")
+    p.close()
+    assert [v for _, v in out] == ["Thanks, I've written that down for later.",
+                                   "So for the write path, how would you keep the counters consistent across regions?"]
+
+
+@pytest.mark.parametrize("text,chunks", [
+    ("You could use a log, e.g. Kafka or a similar queue, for the events here. Then what?",
+     ["You could use a log, e.g. Kafka or a similar queue,", "for the events here. Then what?"]),
+    ("I spoke with Dr. Smith about the U.S. traffic numbers yesterday. Fine.",
+     ["I spoke with Dr. Smith about the U.S. traffic numbers yesterday.", "Fine."]),
+    ("We expect about 3.5 million writes per day at peak load. What else?",
+     ["We expect about 3.5 million writes per day at peak load.", "What else?"]),
+    ("Peak traffic is around 1,000 requests per second at most. Go on.",
+     ["Peak traffic is around 1,000 requests per second at most.", "Go on."]),
+])
+def test_abbreviations_and_numbers_are_not_cut(text, chunks):
+    assert [v for _, v in run(text, 3)] == chunks
+
+
+def test_spanish_questions_are_not_cut_inside_the_question_marks():
+    out = run("¿Y qué pasaría con la consistencia de los datos, si un nodo de caché se cae? "
+              "Piénsalo con calma, por ejemplo, con dos réplicas.", 2)
+    assert [v for _, v in out] == [
+        "¿Y qué pasaría con la consistencia de los datos, si un nodo de caché se cae?",
+        "Piénsalo con calma, por ejemplo, con dos réplicas.",
+    ]
+
+
+def test_spanish_abbreviation_and_first_clause():
+    out = run("Bien, vamos a pensar en el almacenamiento primero, p. ej. una base de datos clave valor. ¿Vale?", 3)
+    assert [v for _, v in out] == [
+        "Bien, vamos a pensar en el almacenamiento primero,",
+        "p. ej. una base de datos clave valor.",
+        "¿Vale?",
+    ]
 
 
 def test_unfinished_tag_at_the_end_is_dropped():
