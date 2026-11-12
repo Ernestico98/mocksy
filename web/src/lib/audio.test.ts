@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { Mic } from "./audio";
+import { ADAPTIVE_FAST_END, Mic } from "./audio";
 
 // Drive the voice-activity detector with synthetic audio, no browser needed.
 const RATE = 16000;
@@ -114,10 +114,20 @@ describe("Mic voice activity detection", () => {
 });
 
 describe("Adaptive end of turn", () => {
-  it("ends a long answer that fades out after 1 s", () => {
+  it("never ends a turn sooner than 1.3 s by default, even after a finished-sounding answer", () => {
     const { mic, onUtterance } = makeMic();
     feed(mic, LOUD, 3200);
     ramp(mic, LOUD, 0.02, 160);  // the last word trails off
+    feed(mic, SILENT, 1250);
+    expect(onUtterance).not.toHaveBeenCalled();
+    feed(mic, SILENT, 150);
+    expect(onUtterance).toHaveBeenCalledTimes(1);
+  });
+
+  it("the faster profile ends a long answer that fades out after 1 s", () => {
+    const { mic, onUtterance } = makeMic({ endOfTurn: ADAPTIVE_FAST_END });
+    feed(mic, LOUD, 3200);
+    ramp(mic, LOUD, 0.02, 160);
     feed(mic, SILENT, 900);
     expect(onUtterance).not.toHaveBeenCalled();
     feed(mic, SILENT, 150);
@@ -125,6 +135,35 @@ describe("Adaptive end of turn", () => {
     const silenceMs = onUtterance.mock.calls[0][1].silenceMs;
     expect(silenceMs).toBeGreaterThanOrEqual(1000);
     expect(silenceMs).toBeLessThan(1100);
+  });
+
+  // the two thinking pauses that a 1 s threshold cuts: safe by default, cut only when opted in
+  const scenarios: [string, (mic: Mic) => void, number][] = [
+    ["3.2 s fading answer, 1.15 s thinking pause", (mic) => {
+      feed(mic, LOUD, 3200);
+      ramp(mic, LOUD, 0.02, 160);
+    }, 1150],
+    ["1.5 s, a 0.5 s gap, a 2.2 s fading stretch, 1.1 s thinking pause", (mic) => {
+      feed(mic, LOUD, 1500);
+      feed(mic, SILENT, 500);
+      feed(mic, LOUD, 2200);
+      ramp(mic, LOUD, 0.02, 160);
+    }, 1100],
+  ];
+
+  it.each(scenarios)("default keeps listening: %s", (_name, speak, pause) => {
+    const { mic, onUtterance } = makeMic();
+    speak(mic);
+    feed(mic, SILENT, pause);
+    feed(mic, LOUD, 800);        // the candidate goes on
+    expect(onUtterance).not.toHaveBeenCalled();
+  });
+
+  it.each(scenarios)("the faster profile ends the turn: %s", (_name, speak, pause) => {
+    const { mic, onUtterance } = makeMic({ endOfTurn: ADAPTIVE_FAST_END });
+    speak(mic);
+    feed(mic, SILENT, pause);
+    expect(onUtterance).toHaveBeenCalledTimes(1);
   });
 
   it.each([800, 1000, 1200])("does not cut a %i ms mid-thought pause after a phrase that stops abruptly", (pause) => {

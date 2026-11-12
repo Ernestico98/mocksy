@@ -19,7 +19,8 @@ export type MicMode = "hands-free" | "ptt";
  * Adaptive end of turn: how long a pause must last before the turn ends, chosen when the pause
  * starts. Conservative on purpose (being cut off is worse than waiting a bit):
  * - `shortMs` only after a long answer whose last stretch of speech was itself long and fades out
- *   like a finished sentence;
+ *   like a finished sentence (the default profile keeps it at baseMs: it never ends a turn sooner
+ *   than a fixed 1.3 s; the opt-in "faster" profile uses 1 s);
  * - `longMs` after a short, abrupt start ("So I think…") or a short fragment after an earlier pause
  *   ("…so I'd… [thinks]"), the typical shapes of a mid-thought pause;
  * - `baseMs` (the old fixed default) otherwise.
@@ -36,9 +37,12 @@ export interface EndOfTurn {
 }
 
 export const ADAPTIVE_END: EndOfTurn = {
-  shortMs: 1000, baseMs: 1300, longMs: 1800,
+  shortMs: 1300, baseMs: 1300, longMs: 1800,
   longSpeechMs: 3000, longRunMs: 2000, shortSpeechMs: 1000, shortRunMs: 700, fadeRatio: 0.6,
 };
+
+/** Opt-in: ends a long, finished-sounding answer after 1 s (may cut a long thinking pause). */
+export const ADAPTIVE_FAST_END: EndOfTurn = { ...ADAPTIVE_END, shortMs: 1000 };
 
 const TAIL_MS = 520, FADE_MS = 120;
 const RUN_GAP_MS = 400;   // a pause at least this long starts a new stretch of speech
@@ -74,7 +78,7 @@ export class Mic {
   private runMs = 0;                                   // speech since the last pause ≥ RUN_GAP_MS
   private tail: { rms: number; ms: number }[] = [];    // the last voiced frames before a pause
 
-  constructor(opts: Partial<Pick<Mic, "mode" | "endSilenceMs" | "onLevel" | "onState" | "onSpeechStart" | "onUtterance" | "onDiscard" | "isPlaybackActive">> = {}) {
+  constructor(opts: Partial<Pick<Mic, "mode" | "endSilenceMs" | "endOfTurn" | "onLevel" | "onState" | "onSpeechStart" | "onUtterance" | "onDiscard" | "isPlaybackActive">> = {}) {
     Object.assign(this, opts);
   }
 
