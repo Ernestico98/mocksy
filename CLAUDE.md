@@ -18,6 +18,7 @@ are spoken with local Kokoro TTS. At the end a second Claude call writes the eva
     the browser's own clock, never timestamps, so remote browsers work; values outside 0–60 s are dropped
   - `packs.py` interview packs: load, parse/serialize, validate, personal-pack CRUD
 - `prompts/interviewer.md`, `prompts/feedback.md` system prompts (`{placeholders}` filled from session meta)
+- `prompts/explainer/{script,format,scene,qa}.md` model-answer worker prompts (generic: no company names)
 - `prompts/packs/*.md` interview types: TOML header between `+++` (title, phases, rubric) + interviewer brief;
   personal packs (e.g. company-specific) go in `data/packs/*.md` and stay out of git. `app/packs.py` parses,
   validates and writes them back (round-trip safe); the in-app editor (`#/packs`, `/api/packs`) only writes
@@ -54,6 +55,21 @@ are spoken with local Kokoro TTS. At the end a second Claude call writes the eva
 - The process runs in the session folder with `--setting-sources "" --strict-mcp-config` and only
   Read/Write/Edit/WebSearch/WebFetch, so it never sees this repo's CLAUDE.md or the user's MCP servers
 - Don't use `--bare`: it forbids subscription (OAuth) auth
+
+## Model answer (see README for the user view)
+- Modes: `video` (script → diagram → voice → scenes → render → qa → fixes → package) and `diagram` (script →
+  diagram → package). Retry continues from the first stage not done; a video run reuses a diagram run's script.
+- Cost bounds (required): one script worker (opus) reading only `brief.md`, `emphasis.md` (from feedback.json),
+  `notes.md`, `format.md` (never the transcript); two scene workers (sonnet) reading only BRIEF.md, their job file,
+  lib.js, reference.js, ≤2 still-render rounds per scene, Bash limited to `node render.mjs beats|preview`; one QA
+  pass (sonnet) on 960 px end-of-beat frames; one fix round (`--resume` of the scene worker); no second QA.
+  The backend never reads images. Every worker gets `--max-budget-usd` = what's left of the cap.
+- Publishing rules: the script is a neutral explainer (no candidate, interview session, mock, mistakes, score,
+  feedback, verdict, company name unless `ma_name_company`). `explainer/script.py:neutrality` runs on script.json
+  (one bounce, then fail) and on scene string literals (fed to QA/fixes, fail if they remain); QA checks frames.
+- One generation at a time; blocked while an interview is live, and new interviews are blocked while it runs.
+- Tests: `tests/test_model_answer.py` (fake Claude + fake renderer), `tests/test_explainer_render.py` (real
+  Chrome/ffmpeg, skipped without them), `MOCKSY_LIVE=1 tests/test_live_model_answer.py` (2 scenes, haiku, ~$0.1).
 
 ## Conventions
 - UI copy is English; interview language is per session (`en`/`es`); evaluation language from settings (default `en`)
