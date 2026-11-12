@@ -77,9 +77,10 @@ flowchart LR
 | --- | --- |
 | **System Design** (classic) | Requirements · High-level design · Deep dive · Wrap-up |
 | **Product Decomposition** | Problem framing · Wireframe · System design |
+| **Behavioural (STAR)** | About you · three story deep dives · Why this role · Your questions (conversation only, no whiteboard) |
 
 Each interview type is a "pack": one Markdown file with the interviewer's brief. To add your own
-(behavioral, frontend system design…), open **Manage types** on the home screen: create one from
+(a company-specific round, frontend system design…), open **Manage types** on the home screen: create one from
 scratch or duplicate a built-in, then edit its phases, rubric and brief in a form (or as raw
 markdown). Packs you make there are saved in `data/packs/`, which stays out of git, so private,
 company-specific prep never ships with the repo. Built-in packs live in `prompts/packs/` and are

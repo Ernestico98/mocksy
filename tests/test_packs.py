@@ -14,8 +14,9 @@ PACKS = load_packs()
 
 
 def test_there_are_packs():
-    assert {p["id"] for p in PACKS} >= {"product-decomposition", "system-design"}
-    assert all(p["builtin"] and p["whiteboard"] is True for p in PACKS)
+    assert {p["id"] for p in PACKS} >= {"product-decomposition", "system-design", "behavioural"}
+    assert all(p["builtin"] for p in PACKS)
+    assert {p["id"] for p in PACKS if not p["whiteboard"]} == {"behavioural"}
 
 
 def test_personal_packs_load_from_the_data_dir(monkeypatch, tmp_path):
@@ -64,6 +65,22 @@ def test_templates_render_without_leftover_placeholders(pack, template):
         assert "[canvas]" in text and "[drawing silently]" in text
         for p in pack["phases"]:
             assert p["key"] in text
+
+
+@pytest.mark.parametrize("template", ["interviewer.md", "feedback.md"])
+def test_behavioural_pack_prompts_never_mention_drawing(template):
+    pack = next(p for p in PACKS if p["id"] == "behavioural")
+    assert pack["whiteboard"] is False
+    meta = {"pack": pack["id"], "phases": pack["phases"], "rubric": pack["rubric"], "lang": "en",
+            "company": "", "level": "Mid", "focus": "", "whiteboard": False}
+    text = render(PROMPTS / template, meta)
+    for word in ("whiteboard", "canvas", "excalidraw", "[drawing silently]", "diagram"):
+        assert word not in text.lower(), word
+    # the base prompts' own "conversation only" notices are the only places drawing/sketching appear
+    for notice in ("the candidate has nothing to draw on. Never ask them to draw or sketch", "there are no drawings to review"):
+        text = text.replace(notice, "").replace(notice.capitalize(), "")
+    assert "draw" not in text.lower() and "sketch" not in text.lower()
+    assert sum(p["minutes"] for p in pack["phases"]) in range(30, 36)
 
 
 @pytest.mark.parametrize("template", ["interviewer.md", "feedback.md"])

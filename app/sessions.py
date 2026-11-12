@@ -370,7 +370,7 @@ def render(template: Path, meta: dict, lang: str | None = None) -> str:
     values = SafeDict(
         pack=pack["body"], company=meta.get("company") or "none (generic)",
         level=meta.get("level") or "not specified", focus=meta.get("focus") or "none",
-        problem=meta.get("problem") or "none (choose one as described above)",
+        problem=meta.get("problem") or "none (follow the interview section above)",
         rubric=", ".join(f'"{r}"' for r in meta.get("rubric") or pack.get("rubric", [])),
         phases=phases, phase_keys=", ".join(p["key"] for p in meta["phases"]),
         language_name=LANGUAGES.get(lang or meta["lang"], lang or meta["lang"]),
