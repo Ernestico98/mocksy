@@ -179,18 +179,19 @@ export const api = {
   interrupt: (id: string, message_id: number, heard_index: number) =>
     request(`${s(id)}/interrupt`, { message_id, heard_index }),
   activity: (id: string, speaking: boolean) => request(`${s(id)}/activity`, { speaking }),
-  played: (id: string, message_id: number, index: number, at: number) =>
-    request(`${s(id)}/played`, { message_id, index, at }),
+  /** `wait_ms`: from the clip's "audio" event to playback starting (browser clock) */
+  played: (id: string, message_id: number, index: number, wait_ms: number) =>
+    request(`${s(id)}/played`, { message_id, index, wait_ms }),
   canvas: (id: string, body: { lines: string[]; png: string | null; scene: string }) => request(`${s(id)}/canvas`, body),
   end: (id: string) => request(`${s(id)}/end`, {}),
   stop: (id: string) => request(`${s(id)}/stop`, {}),
   resume: (id: string) => request(`${s(id)}/resume`, {}),
-  /** `timing`: when the VAD ended the turn (epoch s) and the pause it waited, for latency stats. */
+  /** `timing`: when the VAD ended the turn (performance.now()) and the pause it waited, for latency stats. */
   async transcribe(id: string, wav: Blob, timing?: { vadAt: number; silenceMs: number }): Promise<string> {
     const fd = new FormData();
     fd.append("audio", wav, "turn.wav");
     if (timing) {
-      fd.append("vad_at", String(timing.vadAt));
+      fd.append("vad_age_ms", String(Math.round(performance.now() - timing.vadAt)));
       fd.append("silence_ms", String(Math.round(timing.silenceMs)));
     }
     const r = await fetch(`${s(id)}/transcribe`, { method: "POST", body: fd });

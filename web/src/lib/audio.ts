@@ -17,23 +17,31 @@ export type MicMode = "hands-free" | "ptt";
 
 /**
  * Adaptive end of turn: how long a pause must last before the turn ends, chosen when the pause
- * starts. A long utterance whose energy fades out (a finished sentence) ends sooner; a short one
- * that stops abruptly (likely mid-phrase) waits longer; anything else waits `baseMs`.
+ * starts. Conservative on purpose (being cut off is worse than waiting a bit):
+ * - `shortMs` only after a long answer whose last stretch of speech was itself long and fades out
+ *   like a finished sentence;
+ * - `longMs` after a short, abrupt start ("So I think…") or a short fragment after an earlier pause
+ *   ("…so I'd… [thinks]"), the typical shapes of a mid-thought pause;
+ * - `baseMs` (the old fixed default) otherwise.
  */
 export interface EndOfTurn {
-  shortMs: number;        // after ≥ longSpeechMs of speech that fades out
+  shortMs: number;
   baseMs: number;
-  longMs: number;         // after < shortSpeechMs of speech that doesn't fade out
-  longSpeechMs: number;
-  shortSpeechMs: number;
+  longMs: number;
+  longSpeechMs: number;   // shortMs needs this much speech in the turn…
+  longRunMs: number;      // …and this much since the last pause of ≥ RUN_GAP_MS
+  shortSpeechMs: number;  // a turn shorter than this that stops abruptly gets longMs
+  shortRunMs: number;     // a last stretch shorter than this after earlier speech gets longMs
   fadeRatio: number;      // "fades out": the last 120 ms are below this fraction of the 400 ms before
 }
 
 export const ADAPTIVE_END: EndOfTurn = {
-  shortMs: 800, baseMs: 1300, longMs: 1800, longSpeechMs: 3000, shortSpeechMs: 1000, fadeRatio: 0.6,
+  shortMs: 1000, baseMs: 1300, longMs: 1800,
+  longSpeechMs: 3000, longRunMs: 2000, shortSpeechMs: 1000, shortRunMs: 700, fadeRatio: 0.6,
 };
 
 const TAIL_MS = 520, FADE_MS = 120;
+const RUN_GAP_MS = 400;   // a pause at least this long starts a new stretch of speech
 
 export class Mic {
   mode: MicMode = "hands-free";
@@ -48,6 +56,8 @@ export class Mic {
   onSpeechStart: () => void = () => {};
   /** `silenceMs`: the trailing pause waited before ending the turn (0 for push-to-talk). */
   onUtterance: (wav: Blob, info: { silenceMs: number }) => void = () => {};
+  /** Speech started (onSpeechStart) but was too short to be a turn: a cough, a click. */
+  onDiscard: () => void = () => {};
 
   private stream: MediaStream | null = null;
   private ctx: AudioContext | null = null;
@@ -61,9 +71,10 @@ export class Mic {
   private quietMs = 0;
   private speechMs = 0;
   private endMs = 0;                                   // pause that ends the current turn
+  private runMs = 0;                                   // speech since the last pause ≥ RUN_GAP_MS
   private tail: { rms: number; ms: number }[] = [];    // the last voiced frames before a pause
 
-  constructor(opts: Partial<Pick<Mic, "mode" | "endSilenceMs" | "onLevel" | "onState" | "onSpeechStart" | "onUtterance" | "isPlaybackActive">> = {}) {
+  constructor(opts: Partial<Pick<Mic, "mode" | "endSilenceMs" | "onLevel" | "onState" | "onSpeechStart" | "onUtterance" | "onDiscard" | "isPlaybackActive">> = {}) {
     Object.assign(this, opts);
   }
 
@@ -96,13 +107,13 @@ export class Mic {
     this.stream?.getTracks().forEach((t) => t.stop());
     void this.ctx?.close();
     this.ctx = null;
-    this.rec = null;
+    this.dropRecording();
     this.set("off");
   }
 
   setMode(mode: MicMode) {
     this.mode = mode;
-    this.rec = null;
+    this.dropRecording();
     if (this.ctx) this.set(mode === "ptt" ? "ready" : "listening");
   }
 
@@ -111,8 +122,8 @@ export class Mic {
     if (this.endSilenceMs !== null) return this.endSilenceMs;
     const e = this.endOfTurn;
     const fades = this.fadesOut();
-    if (this.speechMs >= e.longSpeechMs && fades) return e.shortMs;
-    if (this.speechMs < e.shortSpeechMs && !fades) return e.longMs;
+    if (fades && this.speechMs >= e.longSpeechMs && this.runMs >= e.longRunMs) return e.shortMs;
+    if (this.speechMs < e.shortSpeechMs ? !fades : this.runMs < e.shortRunMs) return e.longMs;
     return e.baseMs;
   }
 
@@ -128,8 +139,12 @@ export class Mic {
 
   setMuted(muted: boolean) {
     if (!this.ctx) return;
-    this.rec = null;
+    this.dropRecording();
     this.set(muted ? "muted" : this.mode === "ptt" ? "ready" : "listening");
+  }
+
+  private dropRecording() {
+    if (this.rec) { this.rec = null; this.onDiscard(); }
   }
 
   // push-to-talk
@@ -179,6 +194,7 @@ export class Mic {
           this.rec = this.pre.splice(0);
           this.speechMs = this.loudMs;
           this.quietMs = 0;
+          this.runMs = this.loudMs;
           this.tail = [];
           this.set("speaking");
           this.onSpeechStart();
@@ -192,8 +208,10 @@ export class Mic {
 
     this.rec.push(f);
     if (rms > threshold * 0.6) {
+      if (this.quietMs >= RUN_GAP_MS) { this.runMs = 0; this.tail = []; }
       this.quietMs = 0;
       this.speechMs += dt;
+      this.runMs += dt;
       this.tail.push({ rms, ms: dt });
       let tailMs = this.tail.reduce((n, t) => n + t.ms, 0);
       while (tailMs - this.tail[0].ms >= TAIL_MS) tailMs -= this.tail.shift()!.ms;
@@ -210,7 +228,7 @@ export class Mic {
     this.rec = null;
     this.loudMs = 0;
     this.set(this.mode === "ptt" ? "ready" : "listening");
-    if (!frames || this.speechMs < (manual ? 200 : 350)) return; // too short to be speech
+    if (!frames || this.speechMs < (manual ? 200 : 350)) return this.onDiscard(); // too short to be speech
     this.onUtterance(encodeWav(frames, this.rate), { silenceMs: manual ? 0 : this.quietMs });
   }
 }

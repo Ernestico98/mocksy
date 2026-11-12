@@ -5,7 +5,8 @@ import FeedbackPanel from "../components/FeedbackPanel";
 import Transcript from "../components/Transcript";
 import Whiteboard, { type WhiteboardHandle } from "../components/Whiteboard";
 import { Mic, type MicMode, type MicState } from "../lib/audio";
-import { player } from "../lib/player";
+import { HeldReplies } from "../lib/hold";
+import { player, type Clip } from "../lib/player";
 import { fmt, go, store, voiceName } from "../lib/util";
 import { startIntent } from "./Home";
 
@@ -52,7 +53,17 @@ export default function SessionView({ id, meta: app }: { id: string; meta: AppMe
   messagesRef.current = messages;
   const metaRef = useRef(meta);
   metaRef.current = meta;
-  const unheard = useRef(new Set<number>());
+  // replies that arrive while the candidate talks (see lib/hold.ts), and what was played of each
+  const held = useRef(new HeldReplies());
+  const played = useRef(new Map<number, number>());
+  const announced = useRef(new Map<number, number>());   // when each reply's first clip was announced
+  const transcribingRef = useRef(false);
+  const playHeld = useCallback(() => {
+    for (const clip of held.current.release()) {
+      const m = messagesRef.current.find((x) => x.id === clip.message_id);
+      if (metaRef.current?.status === "live" && !m?.interrupted) player.enqueue(clip);
+    }
+  }, []);
 
   const current = useSyncExternalStore((cb) => player.subscribe(cb), () => player.current);
   const needsGesture = useSyncExternalStore((cb) => player.subscribe(cb), () => player.needsGesture);
@@ -89,14 +100,12 @@ export default function SessionView({ id, meta: app }: { id: string; meta: AppMe
           const m = messagesRef.current.find((x) => x.id === ev.message_id);
           if (m) upsert({ ...m, audio: { ...(m.audio || {}), [ev.index]: ev.url } });
           if (metaRef.current?.status !== "live" || m?.interrupted) break;
-          if (mic.current.state !== "speaking") {
-            player.enqueue({ message_id: ev.message_id, index: ev.index, url: ev.url });
-          } else if (!player.current && !unheard.current.has(ev.message_id)) {
-            // the reply arrived while the candidate is still talking (e.g. after a short pause):
-            // drop it and tell the interviewer what they actually heard (the clips before this one)
-            unheard.current.add(ev.message_id);
-            void api.interrupt(id, ev.message_id, ev.index - 1).catch(() => {});
-          }
+          const clip: Clip = { message_id: ev.message_id, index: ev.index, url: ev.url };
+          if (ev.index === 0) announced.current.set(ev.message_id, performance.now());
+          // the candidate is talking (or their words are being transcribed): hold the reply until
+          // we know whether that was a real turn (then it's dropped) or just noise (then it plays)
+          if (held.current.shouldHold(clip, mic.current.state === "speaking" || transcribingRef.current)) held.current.hold(clip);
+          else player.enqueue(clip);
           break;
         }
         case "status":
@@ -128,6 +137,7 @@ export default function SessionView({ id, meta: app }: { id: string; meta: AppMe
     };
   }, [id, upsert]);
 
+
   // ---------------------------------------------------------------- microphone wiring
   useEffect(() => {
     const m = mic.current;
@@ -145,31 +155,44 @@ export default function SessionView({ id, meta: app }: { id: string; meta: AppMe
       }
       void api.activity(id, true).catch(() => {});
     };
+    m.onDiscard = () => {     // too short to be a turn (a cough, a click): play what was held
+      void api.activity(id, false).catch(() => {});
+      playHeld();
+    };
     m.onUtterance = async (wav, { silenceMs }) => {
-      const vadAt = Date.now() / 1000;
+      const vadAt = performance.now();
       void api.activity(id, false).catch(() => {});
       setTranscribing(true);
+      transcribingRef.current = true;
       // the interviewer gets the latest drawing with what you said: export it while Whisper runs
       const synced = board.current?.sync().catch(() => {});
       try {
         const text = await api.transcribe(id, wav, { vadAt, silenceMs });
-        if (!text) { setNotice("Didn't catch that — please say it again."); return; }
+        transcribingRef.current = false;
+        if (!text) { setNotice("Didn't catch that — please say it again."); playHeld(); return; }
+        // a real turn: replies that arrived meanwhile went unheard; tell the interviewer before it reads this
+        await Promise.all(held.current.drop(played.current).map((d) =>
+          api.interrupt(id, d.message_id, d.heard_index).catch(() => {})));
         await synced;
         await api.say(id, text);
       } catch (e) {
         setNotice("Transcription failed: " + (e as Error).message);
+        playHeld();
       } finally {
+        transcribingRef.current = false;
         setTranscribing(false);
       }
     };
     // first clip of a reply starts playing: closes that turn's latency record
     player.onStart = (clip) => {
+      played.current.set(clip.message_id, Math.max(clip.index, played.current.get(clip.message_id) ?? -1));
       if (clip.index === 0 && metaRef.current?.status === "live") {
-        void api.played(id, clip.message_id, clip.index, Date.now() / 1000).catch(() => {});
+        const arrived = announced.current.get(clip.message_id) ?? performance.now();
+        void api.played(id, clip.message_id, clip.index, Math.round(performance.now() - arrived)).catch(() => {});
       }
     };
     return () => { player.onStart = () => {}; };
-  }, [id]);
+  }, [id, playHeld]);
 
   const enableMic = useCallback(async () => {
     try { await mic.current.enable(); setMicError(""); }
@@ -392,7 +415,7 @@ function VoiceSettings({ meta, app, onEndSilence, debug, onDebug, onClose }: {
       </label>
       <label className="field"><span>Pause that ends your turn</span>
         <select defaultValue={store.get("endSilence", "auto")} onChange={(e) => onEndSilence(e.target.value)}>
-          <option value="auto">Adaptive (0.8–1.8 s)</option>
+          <option value="auto">Adaptive (1–1.8 s)</option>
           <option value="900">Short (0.9 s)</option>
           <option value="1300">Normal (1.3 s)</option>
           <option value="2000">Long (2 s)</option>

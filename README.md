@@ -177,8 +177,10 @@ home screen) is the interviewer's reasoning effort: `default` leaves it to Claud
 answers sooner (with `haiku` it skips thinking).
 
 In a session, the ⚙ menu sets the voice, its speed and the **pause that ends your turn**. The
-default, *Adaptive*, waits 0.8 s after a long answer that trails off like a finished sentence,
-1.8 s after a short, abrupt start, and 1.3 s otherwise; fixed pauses are there if it cuts you off.
+default, *Adaptive*, waits 1 s after a long answer that trails off like a finished sentence,
+1.8 s after a short, abrupt start or a short fragment ("so I'd…"), and 1.3 s otherwise; fixed
+pauses are there if it cuts you off. If your answer continues after the reply has already arrived,
+the reply is dropped and the interviewer is told you didn't hear it.
 **Show response times** (or opening the app with `?debug=1`) shows how long the last reply took,
 from the end of your speech to the interviewer's first audio, stage by stage.
 
