@@ -52,6 +52,7 @@ export default function SessionView({ id, meta: app }: { id: string; meta: AppMe
   const current = useSyncExternalStore((cb) => player.subscribe(cb), () => player.current);
   const needsGesture = useSyncExternalStore((cb) => player.subscribe(cb), () => player.needsGesture);
   const live = meta?.status === "live";
+  const hasBoard = meta?.whiteboard !== false;
 
   const upsert = useCallback((m: Message) => {
     setMessages((list) => {
@@ -233,7 +234,7 @@ export default function SessionView({ id, meta: app }: { id: string; meta: AppMe
   if (error) return <div className="boot">{error} <a href="#/">Back</a></div>;
   if (!meta) return <div className="boot">Loading session…</div>;
 
-  const status = statusLine({ live, server, micState, mode: mic.current.mode, transcribing, playing: !!current, notice, needsGesture, evaluating: meta.status === "evaluating" });
+  const status = statusLine({ live, hasBoard, server, micState, mode: mic.current.mode, transcribing, playing: !!current, notice, needsGesture, evaluating: meta.status === "evaluating" });
   const showFeedbackTab = meta.status !== "live" || !!feedback;
 
   return (
@@ -242,7 +243,7 @@ export default function SessionView({ id, meta: app }: { id: string; meta: AppMe
         meta={meta} app={app} live={live} onBack={back} onEnd={end} onStop={stop} onResume={resume} onPhase={changePhase}
         onEndSilence={(ms) => { mic.current.endSilenceMs = ms; store.set("endSilence", String(ms)); }}
       />
-      <main className="workspace">
+      <main className={`workspace${hasBoard ? "" : " solo"}`}>
         <aside className="side">
           <nav className="tabs" role="tablist">
             <button role="tab" aria-selected={tab === "chat"} className={tab === "chat" ? "active" : ""} onClick={() => setTab("chat")}>Conversation</button>
@@ -264,7 +265,7 @@ export default function SessionView({ id, meta: app }: { id: string; meta: AppMe
                   <div className="mic-row">
                     <MicButton state={micState} level={level} onClick={micAction} />
                     <MicHelp state={micState} mode={mic.current.mode} />
-                    <button className="btn ghost" onClick={askToLook} title="Ask the interviewer to look at your whiteboard now">👀 Look at my board</button>
+                    {hasBoard && <button className="btn ghost" onClick={askToLook} title="Ask the interviewer to look at your whiteboard now">👀 Look at my board</button>}
                   </div>
                   <form className="type-form" onSubmit={sendTyped}>
                     <input value={typed} onChange={(e) => setTyped(e.target.value)} placeholder="…or type here and press Enter" autoComplete="off" />
@@ -277,7 +278,7 @@ export default function SessionView({ id, meta: app }: { id: string; meta: AppMe
           )}
         </aside>
 
-        <section className="board-wrap">
+        {hasBoard && <section className="board-wrap">
           <div className="board-bar small muted">
             {!live ? "Session whiteboard (read-only)."
               : synced ? `The interviewer has your whiteboard · updated ${synced.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit", second: "2-digit" })}`
@@ -286,7 +287,7 @@ export default function SessionView({ id, meta: app }: { id: string; meta: AppMe
           <div className="board">
             <Whiteboard ref={board} sessionId={id} readOnly={!live} onSynced={setSynced} />
           </div>
-        </section>
+        </section>}
       </main>
     </div>
   );
@@ -407,7 +408,7 @@ function MicHelp({ state, mode }: { state: MicState; mode: MicMode }) {
 }
 
 function statusLine(s: {
-  live: boolean; server: Server; micState: MicState; mode: MicMode; transcribing: boolean;
+  live: boolean; hasBoard: boolean; server: Server; micState: MicState; mode: MicMode; transcribing: boolean;
   playing: boolean; notice: string; needsGesture: boolean; evaluating: boolean;
 }): { text: string; dot: string } {
   if (s.evaluating) return { text: "Writing your evaluation…", dot: "think" };
@@ -419,7 +420,10 @@ function statusLine(s: {
   if (s.notice) return { text: s.notice, dot: "err" };
   switch (s.server.state) {
     case "preparing": return { text: "Preparing the interview…", dot: "think" };
-    case "tool": return { text: TOOL_STATUS[s.server.detail] || "Thinking…", dot: "think" };
+    case "tool": {
+      const text = s.server.detail === "Read" && !s.hasBoard ? "Checking notes…" : TOOL_STATUS[s.server.detail];
+      return { text: text || "Thinking…", dot: "think" };
+    }
     case "thinking": {
       const slow = s.server.since && Date.now() - s.server.since > 60000;
       return { text: slow ? "Taking longer than usual… (you can keep talking)" : "The interviewer is thinking…", dot: "think" };

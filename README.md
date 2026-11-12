@@ -79,8 +79,16 @@ flowchart LR
 | **Product Decomposition** | Problem framing · Wireframe · System design |
 
 Each interview type is a "pack": one Markdown file with the interviewer's brief. To add your own
-(behavioral, frontend system design…), drop a file into `prompts/packs/`. Private packs, such as
-company-specific prep, go in `data/packs/`, which stays out of git.
+(behavioral, frontend system design…), open **Manage types** on the home screen: create one from
+scratch or duplicate a built-in, then edit its phases, rubric and brief in a form (or as raw
+markdown). Packs you make there are saved in `data/packs/`, which stays out of git, so private,
+company-specific prep never ships with the repo. Built-in packs live in `prompts/packs/` and are
+read-only in the app; both folders can also be edited by hand.
+
+Set `whiteboard = false` (the "Whiteboard" checkbox in the editor) for conversation-only rounds
+such as behavioural interviews: the session hides the board, and neither the interviewer nor the
+evaluation mentions drawing. It defaults to `true`. Editing a pack never changes an interview
+already in progress: each session keeps a copy of the brief it started with.
 
 <details>
 <summary>What a pack looks like</summary>
@@ -89,6 +97,9 @@ company-specific prep, go in `data/packs/`, which stays out of git.
 +++
 title = "System Design (classic)"
 description = "Design a large-scale backend system: requirements, estimates, high-level design, deep dives."
+company = ""                # optional: pre-fills the company field
+default_language = "en"
+whiteboard = true           # false: conversation only, no drawing board
 phases = [
   { key = "requirements", label = "Requirements", minutes = 10 },
   { key = "high_level", label = "High-level design", minutes = 15 },

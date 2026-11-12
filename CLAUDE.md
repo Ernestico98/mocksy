@@ -11,10 +11,14 @@ are spoken with local Kokoro TTS. At the end a second Claude call writes the eva
   - `interviewer.py` long-lived `claude -p --input-format stream-json` process + streaming tag parser
   - `speech.py` Kokoro TTS / Whisper STT with hallucination filters; STT engine is mlx-whisper on Apple Silicon,
     faster-whisper elsewhere (`stt_engine` in `config.toml`; per-platform markers in `requirements.txt`)
-  - `config.py` `config.toml` defaults + `data/settings.json` overrides, interview packs
+  - `config.py` `config.toml` defaults + `data/settings.json` overrides
+  - `packs.py` interview packs: load, parse/serialize, validate, personal-pack CRUD
 - `prompts/interviewer.md`, `prompts/feedback.md` system prompts (`{placeholders}` filled from session meta)
 - `prompts/packs/*.md` interview types: TOML header between `+++` (title, phases, rubric) + interviewer brief;
-  personal packs (e.g. company-specific) go in `data/packs/*.md` and stay out of git
+  personal packs (e.g. company-specific) go in `data/packs/*.md` and stay out of git. `app/packs.py` parses,
+  validates and writes them back (round-trip safe); the in-app editor (`#/packs`, `/api/packs`) only writes
+  `data/packs/`. `whiteboard = false` (default true) hides the board and drops the `<!-- if whiteboard -->`
+  blocks from the prompts; sessions snapshot the brief (`pack_body`) so edits don't affect running interviews
 - `web/` React 19 + Vite + TypeScript, **pnpm** (not npm)
 - `data/` sessions and settings (gitignored); `models/` Kokoro weights (gitignored)
 

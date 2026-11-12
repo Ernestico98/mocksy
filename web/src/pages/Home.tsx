@@ -62,14 +62,17 @@ export default function Home({ meta }: { meta: AppMeta }) {
           <h2>New interview</h2>
 
           <fieldset className="field">
-            <legend>Interview type</legend>
+            <legend className="legend-row">Interview type <a href="#/packs" className="small">Manage types</a></legend>
             <div className="packs">
               {meta.packs.map((p) => (
                 <label key={p.id} className="pack">
                   <input type="radio" name="pack" checked={p.id === pack} onChange={() => choosePack(p.id)} />
                   <strong>{p.title}</strong>
                   <span>{p.description}</span>
-                  <span className="phase-pills">{p.phases.map((ph) => `${ph.label} ${ph.minutes}′`).join(" · ")}</span>
+                  <span className="phase-pills">
+                    {p.phases.map((ph) => `${ph.label} ${ph.minutes}′`).join(" · ")}
+                    {!p.whiteboard && " · no whiteboard"}{!p.builtin && " · personal"}
+                  </span>
                 </label>
               ))}
             </div>

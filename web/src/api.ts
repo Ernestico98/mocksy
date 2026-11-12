@@ -9,6 +9,16 @@ export interface Pack {
   company: string;
   default_language: string;
   phases: Phase[];
+  whiteboard: boolean;
+  builtin: boolean;
+}
+
+/** A full interview pack, as the editor reads and writes it. */
+export interface PackData extends Pack {
+  rubric: string[];
+  body: string;
+  /** header fields the editor doesn't know about, kept as they are */
+  extra: Record<string, unknown>;
 }
 
 export interface Settings {
@@ -43,6 +53,7 @@ export interface SessionMeta {
   lang: string;
   phases: Phase[];
   rubric: string[];
+  whiteboard?: boolean;
   model: string;
   feedback_model: string;
   started_at?: number;
@@ -99,15 +110,30 @@ export type ServerEvent =
   | { type: "meta"; session: string; meta: SessionMeta }
   | { type: "feedback"; session: string; feedback: Feedback | null };
 
-async function request<T>(path: string, body?: unknown): Promise<T> {
-  const r = await fetch(path, body === undefined ? {} : {
-    method: "POST",
+/** A failed request; `errors` holds per-field validation messages (422 from the pack API). */
+export class ApiError extends Error {
+  constructor(message: string, public status: number, public errors: Record<string, string> = {}) {
+    super(message);
+  }
+}
+
+async function request<T>(path: string, body?: unknown, method = body === undefined ? "GET" : "POST"): Promise<T> {
+  const r = await fetch(path, body === undefined ? { method } : {
+    method,
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
   });
-  if (!r.ok) throw new Error((await r.text()) || r.statusText);
+  if (!r.ok) {
+    const text = await r.text();
+    let data: { detail?: unknown; errors?: Record<string, string> } = {};
+    try { data = JSON.parse(text); } catch { /* not JSON */ }
+    const msg = typeof data.detail === "string" ? data.detail : text || r.statusText;
+    throw new ApiError(msg, r.status, data.errors);
+  }
   return r.json() as Promise<T>;
 }
+
+const p = (id: string) => `/api/packs/${encodeURIComponent(id)}`;
 
 const s = (id: string) => `/api/sessions/${encodeURIComponent(id)}`;
 
@@ -119,6 +145,13 @@ export const api = {
     pack: string; company: string; level: string; focus: string; problem: string; lang: string; model: string; feedback_model: string;
   }) => request<SessionData>("/api/sessions", body),
   session: (id: string) => request<SessionData>(s(id)),
+  packs: () => request<PackData[]>("/api/packs"),
+  pack: (id: string) => request<PackData>(p(id)),
+  createPack: (pack: Omit<PackData, "builtin">) => request<PackData>("/api/packs", pack),
+  updatePack: (id: string, pack: Omit<PackData, "builtin">) => request<PackData>(p(id), pack, "PUT"),
+  deletePack: (id: string) => request(p(id), undefined, "DELETE"),
+  packMarkdown: (pack: Omit<PackData, "builtin">) => request<{ raw: string }>("/api/pack-markdown", pack),
+  parsePackMarkdown: (raw: string) => request<PackData>("/api/pack-markdown/parse", { raw }),
   say: (id: string, text: string, kind: "speech" | "typed" = "speech") => request(`${s(id)}/say`, { text, kind }),
   look: (id: string, text: string) => request(`${s(id)}/look`, { text }),
   phase: (id: string, key: string) => request(`${s(id)}/phase`, { key }),
