@@ -152,6 +152,8 @@ export interface ModelAnswerState {
   outputs: Partial<Record<"video" | "script" | "youtube" | "diagram_svg" | "diagram_png", { url: string; name: string }>>;
   chapters?: { t: number; title: string }[];
   duration_s?: number;
+  /** flagged by the automatic checks: a person should look at these before publishing */
+  review?: string[];
   qa?: { issues: { scene: string; severity: string; kind: string; issue: string }[]; summary: string; frames?: number; fixed?: number };
 }
 

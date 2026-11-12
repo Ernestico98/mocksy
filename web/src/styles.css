@@ -245,6 +245,8 @@ textarea.mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; fon
 .ma-stages .bar { grid-column: 2 / -1; height: 5px; background: var(--panel-2); border: 1px solid var(--line); border-radius: 99px; overflow: hidden; }
 .ma-stages .bar div { height: 100%; background: var(--think); transition: width .3s; }
 .ma-error { margin: 0; white-space: pre-wrap; }
+.ma-review { margin: 0; }
+.ma-review ul { margin: 6px 0 0; padding-left: 18px; }
 .ma-result { display: grid; gap: 10px; }
 .ma-video { width: 100%; border-radius: 10px; background: #000; aspect-ratio: 16 / 9; }
 .ma-chapters { list-style: none; margin: 0; padding: 0; display: grid; gap: 2px; }

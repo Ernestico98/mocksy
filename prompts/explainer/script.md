@@ -12,7 +12,7 @@ Read those files, nothing else. Then write the script with the Write tool to exa
   Each scene has 2-6 beats; a beat is 1-3 spoken sentences plus a visual direction.
 - Solve the problem end to end, in the order of the round's phases: clarify scope and numbers, then the design,
   then the hardest parts in depth, then trade-offs. Spend most time on the concepts `emphasis.md` points to.
-- Be concrete: real numbers, real components, real data models and APIs. When a figure isn't given in the notes,
+- Be concrete: real numbers, real components, real data models and APIs. When a figure isn't given in `scenario.md`,
   pick a reasonable one, say it as an assumption in the narration ("say, ten million links a day") and list it
   in `assumptions`.
 - Narration in {language_name}, spoken style, short sentences, no lists read aloud, no markdown, no symbols the

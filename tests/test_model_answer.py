@@ -604,14 +604,21 @@ HARD = [
     "Practice round recap", "That would get a strong yes.", "You scored a 3 here.", "In this kind of round, start with numbers.",
     "Assessors look for trade-offs.", "The hiring panel wants depth.", "I was asked this in a loop.",
     "Your earlier design skipped the cache.", "En esta entrevista", "El candidato olvidó la caché.", "En la ronda anterior",
+    # what the viewer did or left out
+    "You forgot the cache.", "You didn't mention TTLs.", "You never mentioned the cache.", "You missed atomicity.",
+    "You said Redis, but", "Earlier you talked about sharding.", "Here you went straight to the database.",
+    "Earlier in this session you drew a queue.", "As you saw a moment ago, you put the cache first.",
+    "Last time, the cache was left out.", "Olvidaste la caché.", "No mencionaste la caché.", "Te faltó la cola.",
+    "Faltó mencionar la caché.", "Respondiste rápido.", "Hiciste bien en preguntar.",
+    # interviews, mocks, sessions, scores
+    "In interviews, people often skip estimates.", "A common mistake people make in interviews.", "A common pitfall in interviews",
+    "This mock covers caching.", "Our mock went well.", "In this mock we design a cache.",
+    "This is where the session went off track.", "Score: 3 out of 5",
 ]
 SOFT = [
-    "In this session we design a cache.", "A common mistake is to skip estimates.", "You said Redis, but",
-    "The feedback was clear.", "A common pitfall in interviews", "You never mentioned the cache.",
-    "Earlier you talked about sharding.", "Here you went straight to the database.", "A stronger answer would add a queue.",
-    "Most people jump straight to the database.", "As you saw a moment ago, you put the cache first.",
-    "It was drawn on the board earlier.", "No mencionaste la caché.", "Te faltó la cola.", "Un error común es olvidar la caché.",
-    "Una mejor respuesta añade una cola.", "Faltó hablar de la caché.", "Respondiste rápido.",
+    "In this session we design a cache.", "A common mistake is to skip estimates.", "The feedback was clear.",
+    "A stronger answer would add a queue.", "Most people jump straight to the database.", "It was drawn on the board earlier.",
+    "Un error común es olvidar la caché.", "Una mejor respuesta añade una cola.", "Then you put the queue between them.",
 ]
 
 ALLOWED = [
@@ -626,6 +633,7 @@ ALLOWED = [
     "User interviews showed the pain.", "La entrevista de usuarios mostró el problema.", "Common mistakes when sharding.",
     "The training run takes hours.", "Add a practice session feature.", "This round of retries backs off.",
     "Previous round of compaction freed space.", "You did the math.", "You covered reads.", "Elegiste Postgres, así que…",
+    "Say you chose Postgres for the links table.", "When you missed the cache, read the database.",
 ]
 
 
@@ -645,14 +653,55 @@ def test_neutrality_allows_technical_language(text):
     assert sc.check_text(text) == [], sc.check_text(text)
 
 
-def test_soft_findings_warn_without_failing(fake, done_session):
-    fake.scripts = [make_script(say_extra="You said Redis earlier.")]
+def test_soft_findings_get_one_revision_then_show_for_review(fake, done_session):
+    fake.scripts = [make_script(say_extra="A stronger answer adds a queue."),
+                    make_script(say_extra="Most people jump to the database.")]
+    fake.qa_issues = [{"scene": None, "severity": "medium", "kind": "mismatch", "issue": "Narration says 100 then 200 rps.",
+                       "fix": "Use 100 throughout."}]
     state, _ = run(done_session)
     assert state["status"] == "done"
-    assert [c["stage"] for c in fake.calls].count("script") == 1  # no revision for warnings alone
-    assert any("You said" in w for w in state["warnings"])
+    scripts = [c for c in fake.calls if c["stage"] == "script"]
+    assert len(scripts) == 2 and "A stronger answer" in scripts[1]["prompt"]  # the one shared revision
+    assert any("Most people jump" in w for w in state["warnings"])
+    # what's left is shown for review: in state, in script.md, never in youtube.txt
+    review = state["review"]
+    assert any("Most people jump" in r for r in review) and any("100 then 200" in r for r in review)
+    d = done_session.dir / "model_answer"
+    md, yt = (d / "script.md").read_text(), (d / "youtube.txt").read_text()
+    assert "## Review before publishing" in md and "Most people jump" in md.split("## Review before publishing")[1]
+    assert "Review" not in yt and "100 then 200" not in yt
     qa = next(c for c in fake.calls if c["stage"] == "qa")
-    assert "You said" in qa["prompt"] and "second look" in qa["prompt"]
+    assert "second look" in qa["prompt"] and "Most people jump" in qa["prompt"]
+
+
+def test_diagram_mode_shows_review_items(fake, done_session):
+    fake.scripts = [make_script(say_extra="A stronger answer adds a queue.")]
+    state, _ = run(done_session, "diagram")
+    assert state["status"] == "done" and len([c for c in fake.calls if c["stage"] == "script"]) == 2
+    assert any("A stronger answer" in r for r in state["review"])
+    assert "Review before publishing" in (done_session.dir / "model_answer" / "script.md").read_text()
+
+
+def test_partial_fix_round_reruns_only_unfinished_workers(fake, done_session, monkeypatch):
+    fake.qa_issues = [{"scene": "s01", "t": 1.0, "severity": "high", "kind": "layout", "issue": "a", "fix": "b"},
+                      {"scene": "s02", "t": 1.0, "severity": "high", "kind": "layout", "issue": "c", "fix": "d"}]
+    real = fake.__call__
+    state0 = {}
+
+    def flaky(cwd, prompt, **kw):
+        if prompt.startswith("A review of the rendered frames") and "- s02" in prompt and not state0.get("crashed"):
+            state0["crashed"] = True
+            return {"result": "crash", "cost_usd": 0.0, "session_id": kw.get("resume"), "is_error": True,
+                    "subtype": "error_during_execution", "usage": {}}
+        return real(cwd, prompt, **kw)
+    monkeypatch.setattr(ma, "run_claude", flaky)
+    state, _ = run(done_session)
+    assert state["status"] == "failed" and len(state["fix_done"]) == 1
+    fake.calls.clear()
+    state, _ = run(done_session)
+    assert state["status"] == "done"
+    fixes = [c for c in fake.calls if c["stage"] == "fixes"]
+    assert len(fixes) == 1 and "- s02" in fixes[0]["prompt"] and "- s01" not in fixes[0]["prompt"]
 
 
 def test_failed_fix_worker_keeps_the_round(fake, done_session, monkeypatch):

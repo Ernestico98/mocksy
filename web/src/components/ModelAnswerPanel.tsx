@@ -199,6 +199,12 @@ function Result({ st }: { st: ModelAnswerState }) {
           </a>
         ))}
       </div>
+      {st.review?.length ? (
+        <div className="banner ma-review">
+          <strong>Review before publishing</strong>
+          <ul className="small">{st.review.map((r, i) => <li key={i}>{r}</li>)}</ul>
+        </div>
+      ) : null}
       {st.qa && (
         <p className="small muted">
           Review: {st.qa.summary}{st.qa.fixed ? ` ${st.qa.fixed} sent back for fixes.` : ""}

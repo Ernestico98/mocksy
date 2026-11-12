@@ -482,6 +482,15 @@ class Generation:
     def script_dir(self) -> Path:
         return (self.dir / "script").resolve()
 
+    def review_items(self) -> list[str]:
+        """What a person should look at before publishing: soft check hits in the script and on screen, and
+        review findings about the narration that aren't tied to a scene."""
+        items = [f"Script: {w}" for w in self.state.get("warnings") or []]
+        items += [f"On screen in {sid}: {w}" for sid, ws in (self.state.get("scene_warnings") or {}).items() for w in ws]
+        items += [f"Review: {i['issue']}" + (f" (suggested: {i['fix']})" if i.get("fix") else "")
+                  for i in (self.state.get("qa") or {}).get("narration", [])]
+        return items
+
     def script(self) -> dict:
         return json.loads((self.dir / "script.json").read_text())
 
@@ -515,22 +524,23 @@ class Generation:
         allow = [path_rule("Read", d, "**"), path_rule("Edit", d / "script.json")]
         r = self.worker("script", "script", d, f"Write the script to {out} now.", system, model, tools, allow)
         problems, warnings = self.check_script(d)
-        if problems:
-            self.stage("script", detail=f"{len(problems)} problem(s): one revision")
-            msg = (f"The script was rejected. Fix every problem below, write it again to exactly {out} (that path, "
-                   "nowhere else), then reply with one line.\n" + "\n".join(f"- {p}" for p in problems[:40]))
+        if problems or warnings:  # one revision, shared by both kinds
+            self.stage("script", detail=f"{len(problems)} problem(s), {len(warnings)} warning(s): one revision")
+            msg = f"Revise the script and write it again to exactly {out} (that path, nowhere else), then reply with one line."
+            if problems:
+                msg += "\nFix every problem below:\n" + "\n".join(f"- {p}" for p in problems[:40])
             if warnings:
-                msg += ("\nAlso reword these if they refer to a person, a practice round or someone's attempt (leave "
-                        "them if they are technical):\n" + "\n".join(f"- {w}" for w in warnings[:20]))
+                msg += ("\nReword these if they refer to a person, a practice round or someone's attempt (leave them only "
+                        "if they are plainly technical):\n" + "\n".join(f"- {w}" for w in warnings[:20]))
             self.worker("script", "script revision", d, msg, system, model, tools, allow, resume=r.get("session_id"))
             problems, warnings = self.check_script(d)
             if problems:
                 raise StageError("The script still breaks the rules after one revision:\n"
                                  + "\n".join(f"- {p}" for p in problems[:12]))
-        self.state["warnings"] = warnings  # for the QA pass
+        self.state["warnings"] = warnings  # shown in the tab and script.md, and checked by the QA pass
         data = json.loads((d / "script.json").read_text())
         (self.dir / "script.json").write_text(json.dumps(data, indent=1, ensure_ascii=False))
-        (self.dir / "script.md").write_text(sc.markdown(data, None))
+        (self.dir / "script.md").write_text(sc.markdown(data, None, self.review_items()))
         self.state["script"] = {"title": data["title"], "description": data["description"],
                                 "words": sc.words(data), "scenes": len(data["scenes"]),
                                 "assumptions": data.get("assumptions", [])}
@@ -761,9 +771,13 @@ class Generation:
             qa = json.loads(next((f for f in found if f.exists()), found[0]).read_text())
         except (OSError, ValueError) as e:
             raise StageError(f"The QA pass didn't write a valid qa.json ({e.__class__.__name__}).") from e
-        issues = []
+        issues, narration = [], []
         for i in qa.get("issues", []) if isinstance(qa, dict) else []:
-            if not isinstance(i, dict) or i.get("scene") not in ids:
+            if not isinstance(i, dict):
+                continue
+            if i.get("scene") not in ids:  # about the narration as a whole: a person reviews it before publishing
+                narration.append({"issue": str(i.get("issue", ""))[:400], "fix": str(i.get("fix", ""))[:400],
+                                  "severity": str(i.get("severity", ""))[:10], "kind": str(i.get("kind", ""))[:20]})
                 continue
             issues.append({"scene": i["scene"], "t": i.get("t"),
                            "severity": i.get("severity") if i.get("severity") in ("high", "medium", "low") else "medium",
@@ -780,7 +794,9 @@ class Generation:
             frames = 0
         counts = {s: sum(i["severity"] == s for i in issues) for s in ("high", "medium", "low")}
         found = ", ".join(f"{v} {k}" for k, v in counts.items() if v) or "no issues"
-        self.state["qa"] = {"issues": issues, "frames": frames, "summary": f"{frames} frames reviewed: {found}."}
+        self.state["scene_warnings"] = self.scene_flags(hard=False)
+        self.state["qa"] = {"issues": issues, "narration": narration, "frames": frames,
+                            "summary": f"{frames} frames reviewed: {found}."}
         self.stage("qa", detail=found)
 
     def stage_fixes(self):
@@ -795,8 +811,11 @@ class Generation:
         workers = self.state.get("workers", {})
         owner = {s: name for name, w in workers.items() for s in w["scenes"]}
         by_worker: dict[str, list[dict]] = {}
+        done_workers = set(self.state.get("fix_done") or [])  # a retry skips the workers that already fixed theirs
         for i in issues:
-            by_worker.setdefault(owner.get(i["scene"], "w1"), []).append(i)
+            name = owner.get(i["scene"], "w1")
+            if name not in done_workers:
+                by_worker.setdefault(name, []).append(i)
         errors: list[Exception] = []
 
         def one(name: str, items: list[dict]):
@@ -812,12 +831,15 @@ class Generation:
             try:
                 self.worker("fixes", f"{name} fixes", self.work, msg, self.scene_system(), self.settings["ma_scene_model"],
                             self.SCENE_TOOLS, *self.scene_rules(), resume=w.get("session_id"), share=len(by_worker))
+                with self.lock:
+                    self.state.setdefault("fix_done", []).append(name)
+                self.save()
             except Exception as e:  # noqa: BLE001
                 errors.append(e)
 
         self.stage("fixes", detail=f"{len(issues)} issue(s) in {len({i['scene'] for i in issues})} scene(s)")
         self.prepare_work()
-        self.grant_renders(sorted({i["scene"] for i in issues}), 1)
+        self.grant_renders(sorted({i["scene"] for items in by_worker.values() for i in items}), 1)
         threads = [threading.Thread(target=one, args=(n, items), daemon=True) for n, items in by_worker.items()]
         for t in threads:
             t.start()
@@ -836,6 +858,7 @@ class Generation:
         """After the (single) fix round: publishing check on the scene text, then re-render what changed."""
         flags = self.scene_flags()
         self.state["scene_flags"] = flags
+        self.state["scene_warnings"] = self.scene_flags(hard=False)
         if flags:
             raise StageError("Scene text still breaks the publishing rules after the fixes:\n"
                              + "\n".join(f"- {k}: {v[0]}" for k, v in flags.items()))
@@ -846,7 +869,8 @@ class Generation:
         data = self.script()
         outputs = self.state.setdefault("outputs", {})
         diagram = "diagram.svg" if (self.dir / "diagram.svg").exists() else None
-        (self.dir / "script.md").write_text(sc.markdown(data, diagram))
+        self.state["review"] = self.review_items()
+        (self.dir / "script.md").write_text(sc.markdown(data, diagram, self.state["review"]))
         outputs["script"] = "script.md"
         if self.mode == "video" and (self.dir / VIDEO).exists():
             timings = self.timings()
