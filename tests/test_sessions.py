@@ -89,6 +89,13 @@ def test_dead_process_is_resumed_on_next_message(session):
     assert "hello again" in new.sent[-1]
 
 
+def test_process_exit_shows_the_cli_error(session, events):
+    interviewer(session).on_event("exit", {"value": 1, "error": "Claude Code: error: unknown option '--x'"})
+    status = [e for e in events if e.get("type") == "status"][-1]
+    assert status["state"] == "error" and "unknown option '--x'" in status["detail"]
+    assert "will resume with your next message" in status["detail"]
+
+
 # ---------------------------------------------------------------- candidate turns
 
 def test_say_sends_header_with_clock(session):
@@ -163,6 +170,16 @@ def test_interrupt_records_what_was_heard_and_cancels_tts(session):
     session.say("Sorry, quick question")
     sent = it.sent[-1]
     assert '[interrupted]' in sent and 'They heard: "First sentence here, quite long."' in sent
+
+
+def test_reply_that_arrives_while_the_candidate_still_talks_is_dropped(session):
+    it = interviewer(session)
+    it.reply(("speech", "An answer to half a thought, nobody heard."))
+    msg = next(m for m in session.messages if m["role"] == "interviewer")
+    session.interrupt(msg["id"], heard_index=-1)
+    assert msg["interrupted"] and msg["heard"] == ""
+    session.say("...and the second half of my thought.")
+    assert "didn't hear any of it" in it.sent[-1] and 'They heard: ""' not in it.sent[-1]
 
 
 def test_speech_after_interrupt_is_not_spoken(session):

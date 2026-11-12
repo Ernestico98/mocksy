@@ -5,12 +5,22 @@ export interface Clip { message_id: number; index: number; url: string }
 
 type Listener = () => void;
 
+// Fetch and decode a clip as soon as it's queued, so the next one starts without a gap.
+function load(clip: Clip) {
+  const audio = new Audio();
+  audio.preload = "auto";
+  audio.src = clip.url;
+  return { clip, audio };
+}
+
 class Player {
-  private queue: Clip[] = [];
+  private queue: { clip: Clip; audio: HTMLAudioElement }[] = [];
   private audio: HTMLAudioElement | null = null;
   private blocked: Clip | null = null;
   current: Clip | null = null;
   needsGesture = false;
+  /** Called when a clip actually starts playing (latency stats). */
+  onStart: (clip: Clip) => void = () => {};
   private listeners = new Set<Listener>();
 
   constructor() {
@@ -18,6 +28,19 @@ class Player {
   }
 
   get playing() { return !!this.current; }
+
+  /** Paused because the candidate may be barging in; `unpause` if it was only a noise. */
+  paused = false;
+
+  pause() {
+    if (this.audio && !this.paused) { this.paused = true; this.audio.pause(); }
+  }
+
+  unpause() {
+    if (!this.paused) return;
+    this.paused = false;
+    void this.audio?.play().catch(() => {});
+  }
 
   subscribe(fn: Listener) {
     this.listeners.add(fn);
@@ -27,7 +50,7 @@ class Player {
   private emit() { this.listeners.forEach((l) => l()); }
 
   enqueue(clip: Clip) {
-    this.queue.push(clip);
+    this.queue.push(load(clip));
     if (!this.current) this.next();
   }
 
@@ -35,13 +58,15 @@ class Player {
     this.stop();
     Object.entries(audio)
       .sort((a, b) => +a[0] - +b[0])
-      .forEach(([index, url]) => this.queue.push({ message_id, index: +index, url }));
+      .forEach(([index, url]) => this.queue.push(load({ message_id, index: +index, url })));
     this.next();
   }
 
   stop() {
+    this.queue.forEach((q) => q.audio.removeAttribute("src"));
     this.queue = [];
     this.blocked = null;
+    this.paused = false;
     const a = this.audio;
     this.audio = null;
     this.current = null;
@@ -51,7 +76,7 @@ class Player {
 
   private resume() {
     if (this.blocked && !this.current) {
-      this.queue.unshift(this.blocked);
+      this.queue.unshift(load(this.blocked));
       this.blocked = null;
       this.needsGesture = false;
       this.next();
@@ -59,9 +84,10 @@ class Player {
   }
 
   private next() {
-    const clip = this.queue.shift();
-    if (!clip) { this.current = null; this.audio = null; this.emit(); return; }
-    const audio = new Audio(clip.url);
+    const item = this.queue.shift();
+    if (!item) { this.current = null; this.audio = null; this.emit(); return; }
+    const { clip, audio } = item;
+    this.paused = false;
     this.audio = audio;
     this.current = clip;
     this.emit();
@@ -71,9 +97,13 @@ class Player {
       done = true;
       this.next();
     };
+    audio.onplaying = () => { if (this.audio === audio) this.onStart(clip); };
     audio.onended = go;
     audio.onerror = go;           // missing/broken clip: skip, never retry
+    if (audio.error) return go(); // it already failed while preloading
     audio.play().catch((e: DOMException) => {
+      // paused (maybe a barge-in) before it started: still this clip's turn, not a broken clip
+      if (e.name === "AbortError" && this.paused && this.audio === audio) return;
       if (e.name !== "NotAllowedError") return go();
       done = true;                // autoplay blocked: wait for a click
       this.current = null;

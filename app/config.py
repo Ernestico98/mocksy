@@ -25,6 +25,7 @@ EDITABLE = {
     "model": DEFAULTS["interviewer"]["model"],
     "feedback_model": DEFAULTS["interviewer"]["feedback_model"],
     "feedback_language": DEFAULTS["interviewer"].get("feedback_language", "en"),
+    "effort": DEFAULTS["interviewer"].get("effort", "default"),
     "speed": DEFAULTS["speech"]["speed"],
     "voice_en": DEFAULTS["speech"]["voices"]["en"],
     "voice_es": DEFAULTS["speech"]["voices"]["es"],

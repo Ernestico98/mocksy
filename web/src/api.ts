@@ -25,6 +25,8 @@ export interface Settings {
   model: string;
   feedback_model: string;
   feedback_language: string;
+  /** interviewer reasoning effort: "default" (the CLI's choice), "low", "medium", "high" */
+  effort: string;
   speed: number;
   voice_en: string;
   voice_es: string;
@@ -36,6 +38,7 @@ export interface AppMeta {
   voices: string[];
   settings: Settings;
   models: string[];
+  efforts: string[];
 }
 
 export type SessionStatus = "setup" | "live" | "evaluating" | "ended" | "done";
@@ -56,6 +59,7 @@ export interface SessionMeta {
   whiteboard?: boolean;
   model: string;
   feedback_model: string;
+  effort?: string;
   started_at?: number;
   ended_at?: number;
   phase?: { key: string; started_at: number };
@@ -74,6 +78,23 @@ export interface Message {
   heard?: string;
   audio?: Record<string, string>;
   by?: string;
+  /** candidate turns: how long the interviewer took to answer, per stage (see app/latency.py) */
+  latency?: Latency;
+}
+
+export interface Latency {
+  kind: string;
+  silence_ms?: number;
+  upload_ms?: number;
+  stt_ms?: number;
+  handoff_ms?: number;
+  model_ms?: number;
+  chunk_ms?: number;
+  tts_ms?: number;
+  play_ms?: number;
+  total_ms?: number;
+  total_to?: "played" | "tts_ready";
+  tools_before_speech?: number;
 }
 
 export interface Feedback {
@@ -142,7 +163,7 @@ export const api = {
   saveSettings: (patch: Partial<Settings>) => request<Settings>("/api/settings", patch),
   sessions: () => request<SessionSummary[]>("/api/sessions"),
   createSession: (body: {
-    pack: string; company: string; level: string; focus: string; problem: string; lang: string; model: string; feedback_model: string;
+    pack: string; company: string; level: string; focus: string; problem: string; lang: string; model: string; feedback_model: string; effort: string;
   }) => request<SessionData>("/api/sessions", body),
   session: (id: string) => request<SessionData>(s(id)),
   packs: () => request<PackData[]>("/api/packs"),
@@ -158,13 +179,21 @@ export const api = {
   interrupt: (id: string, message_id: number, heard_index: number) =>
     request(`${s(id)}/interrupt`, { message_id, heard_index }),
   activity: (id: string, speaking: boolean) => request(`${s(id)}/activity`, { speaking }),
+  /** `wait_ms`: from the clip's "audio" event to playback starting (browser clock) */
+  played: (id: string, message_id: number, index: number, wait_ms: number) =>
+    request(`${s(id)}/played`, { message_id, index, wait_ms }),
   canvas: (id: string, body: { lines: string[]; png: string | null; scene: string }) => request(`${s(id)}/canvas`, body),
   end: (id: string) => request(`${s(id)}/end`, {}),
   stop: (id: string) => request(`${s(id)}/stop`, {}),
   resume: (id: string) => request(`${s(id)}/resume`, {}),
-  async transcribe(id: string, wav: Blob): Promise<string> {
+  /** `timing`: when the VAD ended the turn (performance.now()) and the pause it waited, for latency stats. */
+  async transcribe(id: string, wav: Blob, timing?: { vadAt: number; silenceMs: number }): Promise<string> {
     const fd = new FormData();
     fd.append("audio", wav, "turn.wav");
+    if (timing) {
+      fd.append("vad_age_ms", String(Math.round(performance.now() - timing.vadAt)));
+      fd.append("silence_ms", String(Math.round(timing.silenceMs)));
+    }
     const r = await fetch(`${s(id)}/transcribe`, { method: "POST", body: fd });
     if (!r.ok) throw new Error(await r.text());
     return ((await r.json()) as { text: string }).text;

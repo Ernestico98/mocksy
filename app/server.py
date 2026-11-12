@@ -2,18 +2,22 @@
 
 import asyncio
 import json
+import os
 import tempfile
+import threading
+import time
 from contextlib import asynccontextmanager
 from pathlib import Path
 
 from typing import Any
 
-from fastapi import FastAPI, File, HTTPException, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from . import packs, speech
+from .interviewer import EFFORTS
 from .config import LANGUAGES, ROOT, SESSIONS, load_settings, save_settings
 from .sessions import Session, create_session
 
@@ -26,10 +30,21 @@ sessions: dict[str, Session] = {}
 async def lifespan(_app):
     global loop
     loop = asyncio.get_running_loop()
+    if os.environ.get("MOCKSY_WARMUP", "1") != "0":  # tests turn it off
+        threading.Thread(target=warm_up, daemon=True).start()
     yield
 
 
 app = FastAPI(lifespan=lifespan)
+
+
+def warm_up():
+    t = time.time()
+    try:
+        speech.warm_up()
+        print(f"Speech models ready ({time.time() - t:.1f} s)", flush=True)
+    except Exception as e:  # not fatal: they load on first use instead
+        print("Speech warm-up failed:", e, flush=True)
 
 
 @app.exception_handler(packs.PackError)
@@ -61,12 +76,13 @@ def meta():
               for p in packs.load_packs()]
     return {"packs": listed, "languages": LANGUAGES, "voices": speech.voices(),
             "settings": load_settings(),
-            "models": ["haiku", "sonnet", "opus", "fable"]}
+            "models": ["haiku", "sonnet", "opus", "fable"], "efforts": EFFORTS}
 
 
 class SettingsIn(BaseModel):
     model: str | None = None
     feedback_model: str | None = None
+    effort: str | None = None
     speed: float | None = None
     voice_en: str | None = None
     voice_es: str | None = None
@@ -187,6 +203,7 @@ class NewSession(BaseModel):
     lang: str = "en"
     model: str | None = None
     feedback_model: str | None = None
+    effort: str | None = None
 
 
 @app.post("/api/sessions")
@@ -198,7 +215,7 @@ def new_session(body: NewSession):
             s.meta["status"] = "ended"
             s.save()
     s = create_session(body.pack, body.company, body.level, body.focus, body.lang,
-                       body.model, body.feedback_model, broadcast, body.problem)
+                       body.model, body.feedback_model, broadcast, body.problem, body.effort)
     sessions[s.id] = s
     s.start()
     return s.public()
@@ -227,7 +244,11 @@ def look(sid: str, body: SayIn):
 
 
 @app.post("/api/sessions/{sid}/transcribe")
-async def transcribe(sid: str, audio: UploadFile = File(...)):
+async def transcribe(sid: str, audio: UploadFile = File(...), vad_age_ms: float | None = Form(None),
+                     silence_ms: float | None = Form(None)):
+    """For latency stats, the browser sends how long ago its VAD ended the turn (`vad_age_ms`, measured
+    on its own clock, so a remote browser's clock doesn't matter) and the pause it waited."""
+    received = time.time()
     s = get(sid)
     suffix = Path(audio.filename or "a.wav").suffix or ".wav"
     with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as f:
@@ -236,6 +257,10 @@ async def transcribe(sid: str, audio: UploadFile = File(...)):
         text = await asyncio.to_thread(speech.transcribe, f.name, s.lang)
     finally:
         Path(f.name).unlink(missing_ok=True)
+    if text:
+        vad = received - vad_age_ms / 1000 if vad_age_ms is not None and 0 <= vad_age_ms <= 60000 else None
+        ok_silence = silence_ms if silence_ms is not None and 0 <= silence_ms <= 60000 else None
+        s.record_stt(text, {"vad": vad, "received": received, "stt_done": time.time()}, ok_silence)
     return {"text": text}
 
 
@@ -279,6 +304,18 @@ class InterruptIn(BaseModel):
 @app.post("/api/sessions/{sid}/interrupt")
 def interrupt(sid: str, body: InterruptIn):
     get(sid).interrupt(body.message_id, body.heard_index)
+    return {"ok": True}
+
+
+class PlayedIn(BaseModel):
+    message_id: int
+    index: int = 0
+    wait_ms: float | None = None  # browser clock: from the clip's "audio" event to playback starting
+
+
+@app.post("/api/sessions/{sid}/played")
+def played(sid: str, body: PlayedIn):
+    get(sid).played(body.message_id, body.index, body.wait_ms)
     return {"ok": True}
 
 

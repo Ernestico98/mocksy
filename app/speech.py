@@ -103,6 +103,18 @@ def preload_stt():
         _segments(np.zeros(16000, dtype=np.float32), "en")
 
 
+def warm_up():
+    """Loads both models and runs one real utterance through them, so the first turn of an
+    interview isn't slow (the first mlx transcription also compiles its kernels)."""
+    import numpy as np
+
+    samples, sr = synthesize("Hello, this is a quick warm up of the speech models.", "af_heart", "en", 1.0)
+    n = int(len(samples) * 16000 / sr)
+    audio = np.interp(np.linspace(0, len(samples) - 1, n), np.arange(len(samples)), samples).astype(np.float32)
+    with _stt_lock:
+        _segments(audio, "en")
+
+
 def transcribe(path: str, lang: str) -> str:
     with _stt_lock:
         segments = _segments(path, lang)
