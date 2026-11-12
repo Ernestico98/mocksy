@@ -130,54 +130,71 @@ def validate_diagram(d) -> list[str]:
 # ------------------------------------------------------------------ neutrality
 
 # The video is published as a stand-alone tutorial: it must never refer to the person who practised,
-# the practice itself or how it went. The rules match phrases and contexts (interview or practice
-# words, second person about what someone did, verdict language), not bare words, so technical uses
-# ("a Raft candidate", "session token", "relevance score", "user feedback", "mock the payment API",
-# "forgot password", "missed heartbeat") stay allowed.
+# the practice itself or how it went. Rules match phrases in an interview-performance context, not bare
+# words, so technical and product language stays allowed ("a Raft candidate", "user interviews", "session
+# token", "relevance score", "common mistakes when sharding", "this round of retries").
+# Two tiers: HARD rules are unambiguous and must be fixed (the script is bounced once, then the stage fails);
+# SOFT rules are worth a second look and only become warnings for the script revision and the QA pass.
 
 # A sentence with one of these is technical: "candidate" there is a Raft node, a key, a search result...
 TECH_CANDIDATE = re.compile(
     r"\b(raft|leader|election|vote[sd]?|votes|term|nodes?|follower|quorum|keys?|index|generation|replicas?|"
-    r"servers?|search|ranking|ranker|retrieval|matches|match|query|queries|recommendations?|items?|solutions?|"
-    r"líder|elección|votos?|nodos?|claves?|réplicas?|servidor(es)?)\b", re.I)
+    r"servers?|search|rank\w*|re-?rank\w*|retriev\w*|filter\w*|scor\w*|matches|match|query|queries|"
+    r"recommendations?|items?|solutions?|líder|elección|votos?|nodos?|claves?|réplicas?|servidor(es)?)\b", re.I)
 
-YOU_DID = (r"went|talked|mentioned|said|chose|drew|proposed|suggested|skipped|missed|forgot|jumped|focused|"
-           r"spent|answered|struggled|explained|described|covered|ignored|overlooked|glossed|handled|did")
+YOU_DID = (r"went|talked|mentioned|said|chose|drew|put|proposed|suggested|skipped|missed|forgot|jumped|focused|"
+           r"spent|answered|struggled|ignored|overlooked|glossed")
 
-FORBIDDEN: list[tuple[str, str]] = [
-    # interview / practice context
-    (r"\binterview(s|er|ers|ee|ees|ing)?\b(?! (schedul\w*|booking|slots?|platform|calendar)s?\b)",
-     "mentions an interview"),
-    (r"\b(mock|practice|training|coaching) (round|interview|session|exam|run)s?\b", "mentions a practice round"),
-    (r"\b(this|that|today'?s|our|your|the last|last|previous) (mock|practice|round)\b(?! (server|object|service|data|api|"
-     r"implementation|endpoint|client)s?\b)", "mentions a practice round"),
-    (r"\b(this|that|today'?s|our|your|last|previous) sessions?\b(?! (token|store|cookie|id|state|affinity|key|data|storage|"
-     r"timeout|layer|cache|table|replay|ticket|service|expir\w*)s?\b)", "mentions the session"),
-    (r"\brecap of (the|this|your) (round|session|answer)\b", "recaps a practice round"),
-    # people being assessed
-    (r"\binterviewees?\b|\bcandidat(e|es|o|os|a|as)\b", "refers to a candidate"),  # filtered by TECH_CANDIDATE below
-    # second person about what someone did ("you said", "earlier you talked about", "you never mentioned")
-    (r"(?<!\bif )(?<!\bwhen )(?<!\bonce )(?<!\bas )\byou (just |really |also |then |first |quickly |already )?(" + YOU_DID
-     + r")\b", "speaks to someone about what they did"),
-    (r"\byou (didn'?t|did not|never|forgot to|failed to) (mention|say|ask|explain|consider|discuss|cover|talk|address|get)\w*\b",
-     "speaks to someone about what they did"),
-    (r"\b(earlier|before|here|there|then|at first),? you (" + YOU_DID + r"|were|had)\b", "speaks to someone about what they did"),
-    (r"\byour (answer|whiteboard|diagram|sketch|interview|mistakes?|scores?|performance|attempt|approach was|design was|"
-     r"solution was)\b", "speaks to someone about their attempt"),
-    # mistakes, verdicts, scores, feedback about a person
-    (r"\bmistakes?\b", "talks about mistakes"),
+PRACTICE = r"(mock|practice|design|coding|onsite|phone|system design|technical|behaviou?ral|hiring|job|interview)"
+
+# (pattern, why, hard)
+FORBIDDEN: list[tuple[str, str, bool]] = [
+    # interviews and rounds, as the setting of a performance
+    (r"\binterviewees?\b|\binterviewers?\b", "refers to an interviewer or interviewee", True),
+    (r"\b(this|that|your|our|today'?s|last|previous|mock|practice|system design|technical|coding|design|job|onsite|"
+     r"phone|hiring|behaviou?ral|real) interviews?\b", "mentions an interview as a setting", True),
+    (r"\b(this|that|the|your|previous|last|next|each) (kind of |type of |sort of )?" + PRACTICE + r"? ?rounds?\b(?! of\b)",
+     "mentions a round of an interview", True),
+    (r"\b(mock|practice) (round|interview|exam)s?\b|\bmock (session|run)s?\b", "mentions a practice round", True),
+    (r"\b(interview|hiring|onsite) loops?\b|\basked (this|that|it) in (a|an|the|their|your) (loop|onsite|interview|round)\b",
+     "mentions an interview loop", True),
+    (r"\bhiring (panel|committee|manager'?s? (decision|bar))s?\b|\bassessors?\b", "mentions the people assessing", True),
+    (r"\binterviewees?\b|\bcandidat(e|es|o|os|a|as)\b", "refers to a candidate", True),  # filtered by TECH_CANDIDATE
     (r"\bverdicts?\b|\b(strong|lean|weak)[- ](yes|no|hire|no[- ]hire)\b|\bno[- ]hire\b|\b(hire|hiring) (decision|signal|bar|"
-     r"committee|recommendation)s?\b|\b(pass(ed)?|fail(ed)?|ace[sd]?) the (round|interview|loop|onsite)\b", "mentions a verdict"),
-    (r"\bscored (a |an )?\d|\bscore of \d( out of \d+|/\d+)\b|\brubric\b|\byour scores?\b", "mentions a score"),
-    (r"\b(your|my|the interviewer'?s|this|that|interview) feedback\b|\bthe feedback (said|says|was|is|noted|mentioned)\b",
-     "mentions feedback on an attempt"),
+     r"recommendation)s?\b|\b(pass(ed)?|fail(ed)?|ace[sd]?) the (round|interview|loop|onsite)\b", "mentions a verdict", True),
+    (r"\brubrics?\b|\byour scores?\b|\bscored (a |an )?\d", "mentions a score", True),
+    (r"\byour (earlier|previous|first|original) (design|answer|diagram|approach|attempt|sketch)\b|\byour (answer|whiteboard|"
+     r"interview|mistakes?|performance|attempt)\b", "speaks to someone about their attempt", True),
     # Spanish
-    (r"\bentrevist(a|as|ador|adora|adores|ado|ada|ados|adas)\b", "mentions an interview (es)"),
+    (r"\bentrevistador(a|es|as)?\b|\bentrevistad[oa]s?\b", "refers to an interviewer or interviewee (es)", True),
+    (r"\b(esta|tu|nuestra|la última|la anterior) entrevista\b(?! (de|con) (usuari|client))|\bentrevistas? (técnica|de diseño|"
+     r"de trabajo|de sistemas)s?\b", "mentions an interview as a setting (es)", True),
+    (r"\b(la|esta|tu) ronda (anterior|pasada)\b|\ben (esta|la) ronda\b(?! de\b)", "mentions a round of an interview (es)", True),
     (r"\bsimulacros?\b|\bveredictos?\b|\btu (puntuación|nota|respuesta|diagrama|intento)\b|\bdecisión de contratación\b",
-     "refers to the practice or a verdict (es)"),
-    (r"\b(no )?(mencionaste|dijiste|olvidaste|elegiste|dibujaste|propusiste|saltaste|hablaste|explicaste|hiciste)\b|"
-     r"\bte (faltó|olvidaste|saltaste)\b|\bfuiste directo\b", "speaks to someone about what they did (es)"),
-    (r"\b(un |los |el )?errores? comunes?\b|\berror común\b|\btus errores\b", "talks about mistakes (es)"),
+     "refers to the practice or a verdict (es)", True),
+    # soft: second person about what someone did, attempt and coaching language, practice words
+    (r"(?<!\bif )(?<!\bwhen )(?<!\bonce )(?<!\bas )\byou (just |really |also |then |first |quickly |already )?(" + YOU_DID
+     + r")\b", "speaks to someone about what they did", False),
+    (r"\byou (didn'?t|did not|never|forgot to|failed to) (mention|say|ask|explain|consider|discuss|talk|address)\w*\b",
+     "speaks to someone about what they did", False),
+    (r"\b(earlier|before|here|there|then|at first|a moment ago),? you (" + YOU_DID + r"|were|had)\b",
+     "speaks to someone about what they did", False),
+    (r"\bas you saw\b.{0,40}\byou (" + YOU_DID + r")\b", "speaks to someone about what they did", False),
+    (r"\ba (stronger|better|weaker|weak|strong|great|solid|complete|perfect) answer\b|\bthe (best|ideal|right) answer\b",
+     "frames the content as an answer to be judged", False),
+    (r"\bmost (people|engineers|folks|candidates) (jump|go|rush|start|forget|miss|skip)\w*\b", "coaching language", False),
+    (r"\b(on|to|from) the (white)?board\b|\bdrawn on the board\b", "refers to a whiteboard", False),
+    (r"\b(in|during|for|at) (an |the |your |a )?interviews?\b(?! with)|\binterviewing\b", "mentions interviews", False),
+    (r"\b(a|the) (common|typical|classic|frequent|big|biggest) mistake (is|here|people)\b|\bpeople'?s? mistakes?\b",
+     "talks about people's mistakes", False),
+    (r"\b(this|that|today'?s|our|your|last|previous) sessions?\b(?! (token|store|cookie|id|state|affinity|key|data|storage|"
+     r"timeout|layer|cache|table|replay|ticket|service|feature|expir\w*)s?\b)", "mentions the session", False),
+    (r"\b(your|my|the interviewer'?s|interview) feedback\b|\bthe feedback (said|says|was|noted|mentioned)\b",
+     "mentions feedback on an attempt", False),
+    (r"\b(no )?(mencionaste|dijiste|olvidaste|dibujaste|propusiste|saltaste|hablaste|respondiste)\b|\bte (faltó|olvidaste|"
+     r"saltaste)\b|\bfaltó (hablar|mencionar|explicar)\b|\bfuiste directo\b", "speaks to someone about what they did (es)", False),
+    (r"\buna (mejor|buena|gran|peor) respuesta\b|\bla respuesta (ideal|correcta)\b", "frames the content as an answer (es)", False),
+    (r"\b(un|el) error (común|típico|habitual) (es|aquí)\b|\btus errores\b", "talks about people's mistakes (es)", False),
 ]
 
 # Exact on-screen labels that only make sense in a practice context
@@ -192,23 +209,37 @@ def _company_pattern(company: str) -> re.Pattern | None:
     return re.compile(r"(?<![0-9a-z])" + r"[\s\-_.·']*".join(re.escape(c) for c in core) + r"(?![0-9a-z])", re.I)
 
 
-def check_text(text: str, company: str = "") -> list[str]:
+def findings(text: str, company: str = "") -> list[tuple[bool, str]]:
+    """(hard, message) for every rule the text breaks."""
     out = []
-    for pattern, why in FORBIDDEN:
+    for pattern, why, hard in FORBIDDEN:
         for m in re.finditer(pattern, text, flags=re.I):
-            if why == "refers to a candidate" and not m.group(0).lower().startswith("interviewee"):
-                sentence = re.split(r"(?<=[.!?])\s+", text[max(0, m.start() - 300):m.end() + 300])
-                around = next((x for x in sentence if m.group(0) in x), text)
-                if TECH_CANDIDATE.search(around):
+            word = m.group(0).lower()
+            if why == "refers to a candidate":
+                sentence = next((x for x in re.split(r"(?<=[.!?])\s+", text) if m.group(0) in x), text)
+                if TECH_CANDIDATE.search(sentence):
                     continue
-            out.append(f'"{m.group(0)}" ({why})')
+            if why.startswith("mentions a round") and re.search(r"\b(retr|compact|test|review|vot|rollout)", text[m.end():m.end() + 30], re.I):
+                continue
+            out.append((hard, f'"{m.group(0)}" ({why})'))
             break
     if BARE_LABELS.match(text):
-        out.append(f'"{text.strip()}" (practice-context label)')
-    pat = _company_pattern(company)
-    if pat and (m := pat.search(text)):
-        out.append(f'"{m.group(0)}" (names the target company)')
+        out.append((True, f'"{text.strip()}" (practice-context label)'))
+    for name in ([company] if isinstance(company, str) else list(company)):
+        pat = _company_pattern(name)
+        if pat and (m := pat.search(text)):
+            out.append((True, f'"{m.group(0)}" (names the target company)'))
+            break
     return out
+
+
+def check_text(text: str, company="") -> list[str]:
+    """Every finding, hard and soft. `company`: a name or a list of names (company, product names)."""
+    return [msg for _, msg in findings(text, company)]
+
+
+def hard_findings(text: str, company="") -> list[str]:
+    return [msg for hard, msg in findings(text, company) if hard]
 
 
 def script_texts(script: dict) -> list[tuple[str, str]]:
@@ -234,9 +265,10 @@ def script_texts(script: dict) -> list[tuple[str, str]]:
     return [(w, t) for w, t in out if isinstance(t, str) and t]
 
 
-def neutrality(script: dict, company: str = "") -> list[str]:
-    """Violations of the publishing rules, as "where: what" lines."""
-    return [f"{where}: {v}" for where, text in script_texts(script) for v in check_text(text, company)]
+def neutrality(script: dict, company="", hard: bool = True) -> list[str]:
+    """Breaks of the publishing rules, as "where: what" lines: the hard ones (must be fixed), or with
+    hard=False the soft ones (warnings for a second look)."""
+    return [f"{where}: {msg}" for where, text in script_texts(script) for h, msg in findings(text, company) if h == hard]
 
 
 STRING_LITERAL = re.compile(r"\"((?:[^\"\\\n]|\\.)*)\"|'((?:[^'\\\n]|\\.)*)'|`((?:[^`\\]|\\.)*)`")
