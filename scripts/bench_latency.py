@@ -139,9 +139,9 @@ def main():
     s.start()
     if not idle.wait(240):
         sys.exit("no greeting from the interviewer")
-    first_audio = next((m for m in s.messages if m["role"] == "interviewer" and m["kind"] == "speech"), None)
-    deadline = time.time() + 30
-    while first_audio and not first_audio.get("audio", {}).get("0") and time.time() < deadline:
+    greeting = next((m for m in s.messages if m["role"] == "interviewer" and m["kind"] == "speech"), None)
+    deadline = time.time() + 60  # all of it synthesised, so turn 1 doesn't queue behind the greeting
+    while greeting and len(greeting.get("audio", {})) < len(greeting["chunks"]) and time.time() < deadline:
         time.sleep(0.02)
     print(f"Greeting (process start → reply done) {ms(time.time() - t)} ms\n")
 
