@@ -679,7 +679,8 @@ class Generation:
                 chapters.append({"t": round(t, 2), "title": s["title"]})
                 t += timings[s["id"]]["duration"]
             self.state["chapters"] = chapters
-        self.stage("package", detail=", ".join(sorted(outputs)))
+        names = {"video": "MP4", "youtube": "YouTube text", "script": "script", "diagram_svg": "diagram"}
+        self.stage("package", detail=", ".join(names[k] for k in names if k in outputs))
 
 
 # ------------------------------------------------------------------ module API

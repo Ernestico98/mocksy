@@ -252,6 +252,6 @@ textarea.mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; fon
 .ma-chapters button:hover { background: var(--panel-2); }
 .ma-chapters .t { color: var(--muted); font-variant-numeric: tabular-nums; margin-right: 6px; }
 .ma-downloads { display: flex; gap: 6px; flex-wrap: wrap; }
-.ma-downloads .btn { text-decoration: none; font-size: 12.5px; padding: 6px 10px; }
+.ma-downloads .btn { text-decoration: none; color: inherit; font-size: 12.5px; padding: 6px 10px; }
 .ma-diagram { width: 100%; border-radius: 10px; border: 1px solid var(--line); }
 .ma-settings .check { display: flex; gap: 8px; align-items: center; margin-bottom: 8px; }
