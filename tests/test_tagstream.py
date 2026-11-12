@@ -229,3 +229,58 @@ def test_older_cli_without_effort_is_retried_without_it(monkeypatch, capsys):
     assert "[system] start" in made[1].stdin.getvalue()
     assert "doesn't support --effort" in capsys.readouterr().out
     assert not any(k == "exit" and d.get("error") for k, d in events)
+
+
+def test_interviewer_counts_as_alive_while_deciding_to_retry(monkeypatch):
+    import threading
+    import time
+
+    from app.interviewer import Interviewer
+    release, release2 = threading.Event(), threading.Event()
+
+    class SlowDeath(FakeProc):
+        gate = release
+
+        def wait(self):          # the reader is still collecting stderr / deciding
+            self.gate.wait(3)
+            return self.code
+
+    class SlowDeath2(SlowDeath):
+        gate = release2
+
+    made = spawn_with(monkeypatch,
+                      lambda a: SlowDeath(a, stderr="error: unknown option '--effort'\n", code=1),
+                      lambda a: SlowDeath2(a))
+    events = []
+    it = Interviewer("/tmp", "haiku", "P", None, lambda k, d: events.append((k, d)), effort="low")
+    time.sleep(0.05)
+    assert it.alive                    # dead process, but a retry may follow: don't replace it
+    release.set()
+    end = time.time() + 3
+    while time.time() < end and len(made) < 2:
+        time.sleep(0.01)
+    assert len(made) == 2 and it.alive  # respawned in place: still one interviewer
+    release2.set()
+    end = time.time() + 3
+    while time.time() < end and not any(k == "exit" for k, _ in events):
+        time.sleep(0.01)
+    assert not it.alive                # the retry ended too (empty output): now a new one may start
+    it.stop()
+
+
+def test_stopped_interviewer_is_not_alive(monkeypatch):
+    from app.interviewer import Interviewer
+
+    class Running(FakeProc):
+        terminated = False
+
+        def poll(self):
+            return None
+
+        def terminate(self):
+            self.terminated = True
+
+    made = spawn_with(monkeypatch, lambda a: Running(a))
+    it = Interviewer("/tmp", "sonnet", "P", None, lambda k, d: None)
+    it.stop()
+    assert not it.alive and made[0].terminated

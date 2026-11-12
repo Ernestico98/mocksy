@@ -146,6 +146,7 @@ class Interviewer:
 
     effort: str | None = None
     stopped = False
+    exited = False                # the reader saw the process end and decided not to respawn it
     inflight: str | None = None   # the message being answered, resent if the process is respawned
 
     def __init__(self, cwd, model: str, system_prompt: str, resume: str | None,
@@ -195,11 +196,13 @@ class Interviewer:
 
     @property
     def alive(self) -> bool:
-        return self.proc.poll() is None
+        # Until the reader has decided (it may respawn without --effort), a dead process still counts
+        # as alive, so the session doesn't start a second interviewer meanwhile.
+        return not self.stopped and not self.exited
 
     def stop(self):
         self.stopped = True
-        if self.alive:
+        if self.proc.poll() is None:
             self.proc.terminate()
 
     # ---------------------------------------------------------- output
@@ -253,6 +256,7 @@ class Interviewer:
                 return
         # e.g. "error: unknown option": the session shows the CLI's own message, not just "stopped"
         reason = f"Claude Code: {error.splitlines()[-1][:300]}" if code and error and not self.stopped else None
+        self.exited = True
         self.on_event("exit", {"value": code, "error": reason})
 
     def _drain_stderr(self, proc):
