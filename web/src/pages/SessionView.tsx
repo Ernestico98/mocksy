@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState, useSyncExternalStore, type Fo
 import { api, subscribe, type AppMeta, type Feedback, type Latency, type Message, type SessionMeta } from "../api";
 import { useConfirm } from "../components/Confirm";
 import FeedbackPanel from "../components/FeedbackPanel";
+import ModelAnswerPanel from "../components/ModelAnswerPanel";
 import Transcript from "../components/Transcript";
 import Whiteboard, { type WhiteboardHandle } from "../components/Whiteboard";
 import { ADAPTIVE_END, ADAPTIVE_FAST_END, Mic, type MicMode, type MicState } from "../lib/audio";
@@ -39,7 +40,7 @@ export default function SessionView({ id, meta: app }: { id: string; meta: AppMe
   const [messages, setMessages] = useState<Message[]>([]);
   const [feedback, setFeedback] = useState<Feedback | null>(null);
   const [server, setServer] = useState<Server>({ state: "idle", detail: "", since: 0 });
-  const [tab, setTab] = useState<"chat" | "feedback">("chat");
+  const [tab, setTab] = useState<"chat" | "feedback" | "answer">("chat");
   const [flashId, setFlashId] = useState<number | null>(null);
   const [micState, setMicState] = useState<MicState>("off");
   const [level, setLevel] = useState(0);
@@ -314,6 +315,9 @@ export default function SessionView({ id, meta: app }: { id: string; meta: AppMe
             {showFeedbackTab && (
               <button role="tab" aria-selected={tab === "feedback"} className={tab === "feedback" ? "active" : ""} onClick={() => setTab("feedback")}>Evaluation</button>
             )}
+            {feedback && !live && (
+              <button role="tab" aria-selected={tab === "answer"} className={tab === "answer" ? "active" : ""} onClick={() => setTab("answer")}>Model answer</button>
+            )}
           </nav>
 
           {tab === "chat" ? (
@@ -338,6 +342,8 @@ export default function SessionView({ id, meta: app }: { id: string; meta: AppMe
                 </div>
               )}
             </div>
+          ) : tab === "answer" && feedback ? (
+            <div className="tab-body scroll"><ModelAnswerPanel meta={meta} app={app} /></div>
           ) : (
             <div className="tab-body scroll"><FeedbackPanel meta={meta} feedback={feedback} onJump={jumpTo} /></div>
           )}

@@ -223,3 +223,35 @@ textarea.mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; fon
 }
 .pack-editor .row2 { align-items: start; }
 .pack-editor fieldset.field > .btn { justify-self: start; }
+
+/* ---------------------------------------------------------------- model answer */
+.ma { display: grid; gap: 14px; }
+.ma-intro { margin: 0; }
+.ma h3 { margin: 6px 0 4px; font-size: 14px; }
+.ma-modes { display: grid; gap: 10px; }
+.ma-mode { display: grid; gap: 6px; padding: 12px; border: 1px solid var(--line); border-radius: 10px; }
+.ma-mode .btn { justify-self: start; }
+.ma .warn { color: var(--warn); }
+.ma-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.ma-progress { display: grid; gap: 8px; }
+.ma-stages { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; }
+.ma-stages li { display: grid; grid-template-columns: 18px auto 1fr; gap: 2px 8px; align-items: baseline; }
+.ma-stages .ic { color: var(--muted); text-align: center; }
+.ma-stages li.done .ic { color: var(--ok); }
+.ma-stages li.running .ic { color: var(--think); }
+.ma-stages li.failed .ic { color: var(--rec); }
+.ma-stages li.running .lab { font-weight: 600; }
+.ma-stages li.pending .lab { color: var(--muted); }
+.ma-stages .bar { grid-column: 2 / -1; height: 5px; background: var(--panel-2); border: 1px solid var(--line); border-radius: 99px; overflow: hidden; }
+.ma-stages .bar div { height: 100%; background: var(--think); transition: width .3s; }
+.ma-error { margin: 0; white-space: pre-wrap; }
+.ma-result { display: grid; gap: 10px; }
+.ma-video { width: 100%; border-radius: 10px; background: #000; aspect-ratio: 16 / 9; }
+.ma-chapters { list-style: none; margin: 0; padding: 0; display: grid; gap: 2px; }
+.ma-chapters button { width: 100%; text-align: left; border: 0; background: transparent; padding: 4px 6px; border-radius: 6px; cursor: pointer; }
+.ma-chapters button:hover { background: var(--panel-2); }
+.ma-chapters .t { color: var(--muted); font-variant-numeric: tabular-nums; margin-right: 6px; }
+.ma-downloads { display: flex; gap: 6px; flex-wrap: wrap; }
+.ma-downloads .btn { text-decoration: none; font-size: 12.5px; padding: 6px 10px; }
+.ma-diagram { width: 100%; border-radius: 10px; border: 1px solid var(--line); }
+.ma-settings .check { display: flex; gap: 8px; align-items: center; margin-bottom: 8px; }

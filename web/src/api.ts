@@ -30,6 +30,15 @@ export interface Settings {
   speed: number;
   voice_en: string;
   voice_es: string;
+  /** model answer (see config.toml [model_answer]) */
+  ma_script_model: string;
+  ma_scene_model: string;
+  ma_qa_model: string;
+  ma_budget_usd: number;
+  ma_scenes: number;
+  ma_fix_rounds: number;
+  ma_name_company: boolean;
+  ma_chrome: string;
 }
 
 export interface AppMeta {
@@ -123,13 +132,45 @@ export interface SessionSummary {
   minutes: number;
 }
 
+export type ModelAnswerMode = "video" | "diagram";
+export type StageStatus = "pending" | "running" | "done" | "failed" | "cancelled" | "skipped";
+
+export interface ModelAnswerState {
+  mode: ModelAnswerMode;
+  status: "running" | "done" | "failed" | "cancelled";
+  error: string | null;
+  stages: Record<string, { status: StageStatus; detail?: string; progress?: number | null; started?: number; ended?: number }>;
+  labels: Record<string, string>;
+  cost_usd: number;
+  budget_usd: number;
+  runs: { stage: string; worker: string; model: string; cost_usd: number; duration_s?: number }[];
+  started_at: number;
+  ended_at: number | null;
+  script?: { title: string; description: string; words: number; scenes: number; assumptions: string[] };
+  outputs: Partial<Record<"video" | "script" | "youtube" | "diagram_svg" | "diagram_png", { url: string; name: string }>>;
+  chapters?: { t: number; title: string }[];
+  duration_s?: number;
+  qa?: { issues: { scene: string; severity: string; kind: string; issue: string }[]; summary: string; fixed?: number };
+}
+
+export interface Estimate { usd: [number, number]; minutes: [number, number]; tokens: Record<string, number>; budget_usd: number }
+
+export interface ModelAnswerStatus {
+  state: ModelAnswerState | null;
+  /** why the video can't be rendered on this machine (null: it can) */
+  ready: string | null;
+  estimates: Record<ModelAnswerMode, Estimate>;
+  settings: Partial<Settings>;
+}
+
 export type ServerEvent =
   | { type: "settings"; settings: Settings }
   | { type: "message"; session: string; message: Message }
   | { type: "audio"; session: string; message_id: number; index: number; url: string }
   | { type: "status"; session: string; state: string; detail?: string }
   | { type: "meta"; session: string; meta: SessionMeta }
-  | { type: "feedback"; session: string; feedback: Feedback | null };
+  | { type: "feedback"; session: string; feedback: Feedback | null }
+  | { type: "model_answer"; session: string; state: ModelAnswerState };
 
 /** A failed request; `errors` holds per-field validation messages (422 from the pack API). */
 export class ApiError extends Error {
@@ -186,6 +227,11 @@ export const api = {
   end: (id: string) => request(`${s(id)}/end`, {}),
   stop: (id: string) => request(`${s(id)}/stop`, {}),
   resume: (id: string) => request(`${s(id)}/resume`, {}),
+  modelAnswer: (id: string) => request<ModelAnswerStatus>(`${s(id)}/model-answer`),
+  startModelAnswer: (id: string, mode: ModelAnswerMode, fresh = false) =>
+    request<ModelAnswerStatus>(`${s(id)}/model-answer`, { mode, fresh }),
+  /** cancels a running generation; otherwise deletes what was generated */
+  stopModelAnswer: (id: string) => request(`${s(id)}/model-answer`, undefined, "DELETE"),
   /** `timing`: when the VAD ended the turn (performance.now()) and the pause it waited, for latency stats. */
   async transcribe(id: string, wav: Blob, timing?: { vadAt: number; silenceMs: number }): Promise<string> {
     const fd = new FormData();
