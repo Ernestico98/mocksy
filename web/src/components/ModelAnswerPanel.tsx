@@ -26,6 +26,10 @@ const MODE_TEXT: Record<ModelAnswerMode, { title: string; what: string; button: 
 
 const usd = (n: number) => `$${n.toFixed(2)}`;
 const range = (e: Estimate) => `${usd(e.usd[0])}–${usd(e.usd[1])}`;
+const tokens = (e: Estimate) => {
+  const total = Object.values(e.tokens).reduce((a, b) => a + b, 0);
+  return total >= 1e6 ? `${(total / 1e6).toFixed(1)}M` : `${Math.round(total / 1000)}k`;
+};
 const STATUS_ICON: Record<string, string> = { done: "✓", running: "●", failed: "✕", cancelled: "■", pending: "○", skipped: "–" };
 
 export default function ModelAnswerPanel({ meta, app }: Props) {
@@ -50,8 +54,9 @@ export default function ModelAnswerPanel({ meta, app }: Props) {
 
   async function generate(mode: ModelAnswerMode, fresh = false) {
     const e = data!.estimates[mode];
-    const text = `${MODE_TEXT[mode].title}: estimated ${range(e)} (API-equivalent, as Claude Code reports it; on a subscription it uses `
-      + `well under half of a session window) and ${e.minutes[0]}–${e.minutes[1]} min. It stops at the ${usd(e.budget_usd)} budget cap.`;
+    const text = `${MODE_TEXT[mode].title}: estimated ${range(e)}, typically ${usd(e.typical_usd)} (API-equivalent, as Claude Code `
+      + `reports it; about ${tokens(e)} tokens, mostly cache reads) and ${e.minutes[0]}–${e.minutes[1]} min. `
+      + `It stops cleanly at the ${usd(e.budget_usd)} budget cap.`;
     if (!(await ask(text, "Generate"))) return;
     await run(() => api.startModelAnswer(id, mode, fresh).then(setData));
   }
@@ -63,12 +68,12 @@ export default function ModelAnswerPanel({ meta, app }: Props) {
   }
 
   async function cancel() {
-    await run(() => api.stopModelAnswer(id));
+    await run(() => api.cancelModelAnswer(id));
   }
 
   async function startOver() {
-    if (!(await ask("Delete the generated model answer? Its files are removed.", "Delete"))) return;
-    await run(async () => { await api.stopModelAnswer(id); await load(); });
+    if (!(await ask("Delete the generated model answer? Its files (video, script, diagram) are removed for good.", "Delete"))) return;
+    await run(async () => { await api.deleteModelAnswer(id); await load(); });
   }
 
   return (
@@ -117,7 +122,7 @@ function Start({ data, busy, onGenerate }: { data: ModelAnswerStatus; busy: bool
           <div className="ma-mode" key={m}>
             <strong>{MODE_TEXT[m].title}</strong>
             <span className="small muted">{MODE_TEXT[m].what}</span>
-            <span className="small">≈ {range(e)} · {e.minutes[0]}–{e.minutes[1]} min</span>
+            <span className="small">≈ {range(e)} (typically {usd(e.typical_usd)}) · {e.minutes[0]}–{e.minutes[1]} min · cap {usd(e.budget_usd)}</span>
             {blocked && <span className="small warn">{blocked}</span>}
             <button className={`btn${m === "video" ? " primary" : ""}`} disabled={busy || !!blocked} onClick={() => onGenerate(m)}>
               {MODE_TEXT[m].button}
@@ -195,8 +200,7 @@ function Result({ st }: { st: ModelAnswerState }) {
       </div>
       {st.qa && (
         <p className="small muted">
-          Review: {st.qa.issues.length ? `${st.qa.issues.length} issue(s) found${st.qa.fixed ? `, ${st.qa.fixed} sent back for fixes` : ""}` : "no issues found"}.
-          {st.qa.summary ? ` ${st.qa.summary}` : ""}
+          Review: {st.qa.summary}{st.qa.fixed ? ` ${st.qa.fixed} sent back for fixes.` : ""}
         </p>
       )}
       {st.script?.assumptions?.length ? (
@@ -253,8 +257,8 @@ function SettingsBox({ app, meta, settings, onSaved }: { app: AppMeta; meta: Ses
         <input type="checkbox" checked={!!settings.ma_name_company} onChange={(e) => save({ ma_name_company: e.target.checked })} />
         Allow naming the target company{meta.company ? ` (${meta.company})` : ""} in the video
       </label>
-      <p className="hint">Defaults keep each video within about half of a Claude session window: one script run, two scene
-        workers, one review pass, one fix round.</p>
+      <p className="hint">Each video is bounded: one script run, two scene workers (at most 2 render rounds per scene),
+        one review pass, one fix round. The cap stops the generation if it's reached.</p>
       {err && <p className="hint warn">{err}</p>}
     </details>
   );

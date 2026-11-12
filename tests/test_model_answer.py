@@ -1,6 +1,7 @@
 """Model answer: stage machine with fake Claude workers and a fake renderer (no model, no Chrome)."""
 
 import json
+import os
 import threading
 import time
 
@@ -47,10 +48,16 @@ class FakeClaude:
         self.cost = 0.1
         self.block: threading.Event | None = None  # scene workers wait on it (cancel tests)
         self.fix_edit = True
+        self.session_cost: dict[str, float] = {}
+        self.lock = threading.RLock()
 
-    def __call__(self, cwd, prompt, *, system, model, tools, allowed, budget_usd, resume=None, on_start=None):
-        call = {"cwd": cwd, "prompt": prompt, "system": system, "model": model, "tools": tools, "allowed": allowed,
-                "budget_usd": budget_usd, "resume": resume}
+    def __call__(self, cwd, prompt, *, system, model, tools, allow, deny=(), budget_usd, resume=None, on_start=None):
+        with self.lock:
+            return self.handle(cwd, prompt, system, model, tools, allow, deny, budget_usd, resume)
+
+    def handle(self, cwd, prompt, system, model, tools, allow, deny, budget_usd, resume):
+        call = {"cwd": cwd, "prompt": prompt, "system": system, "model": model, "tools": tools, "allow": allow,
+                "deny": list(deny), "budget_usd": budget_usd, "resume": resume}
         self.calls.append(call)
         if cwd.name == "script":
             call["stage"] = "script"
@@ -66,13 +73,17 @@ class FakeClaude:
                     f'scene("{s["id"]}", (t, B) => L.text({{x: 960, y: 500, t: "{self.scene_text}"}}));')
         elif prompt.startswith("Review the frames"):
             call["stage"] = "qa"
-            (cwd / "qa.json").write_text(json.dumps({"issues": self.qa_issues, "summary": "ok"}))
+            (cwd / "out" / "qa" / "qa.json").write_text(json.dumps({"issues": self.qa_issues, "summary": "ok"}))
         else:
             call["stage"] = "fixes"
             if self.fix_edit:
                 for sid in {i["scene"] for i in self.qa_issues if f"- {i['scene']}" in prompt}:
                     (cwd / "scenes" / f"{sid}.js").write_text(f'scene("{sid}", (t, B) => "fixed");')
-        return {"result": "done", "cost_usd": self.cost, "session_id": f"sess-{len(self.calls)}", "is_error": False,
+        with self.lock:
+            sid = resume or f"sess-{len(self.calls)}"
+            self.session_cost[sid] = self.session_cost.get(sid, 0) + self.cost  # reported cumulatively per session
+            reported = self.session_cost[sid]
+        return {"result": "done", "cost_usd": reported, "session_id": sid, "is_error": False,
                 "subtype": "success", "usage": {"input_tokens": 10, "output_tokens": 20}, "duration_s": 0.1}
 
 
@@ -126,10 +137,17 @@ def done_session(events):
     s.meta["status"] = "done"
     s.save()
     (s.dir / "feedback.json").write_text(json.dumps({
-        "verdict": "lean hire", "summary": "x", "top3": ["Explain token bucket refill"],
-        "review": [{"id": 3, "topic": "Limits", "what": "Distributed counters need atomic updates."}],
-        "report": "## Verdict\nSolid."}))
-    (s.dir / "notes.md").write_text("Scenario: a rate limiter for a public API.")
+        "verdict": "lean hire", "summary": "SECRET SUMMARY", "top3": ["SECRET TOP3 works at Globex"],
+        "scores": {"Requirements & scoping": 4, "Estimation": 2, "High-level architecture": 3, "Data model & APIs": None,
+                   "Scalability & reliability": 5, "Trade-offs & communication": 4},
+        "review": [{"id": 3, "topic": "SECRET TOPIC", "what": "SECRET WHAT"}],
+        "report": "## Verdict\nSECRET REPORT: lean hire, didn't land."}))
+    (s.dir / "notes.md").write_text(
+        "# Scenario: rate limiter\nHidden: 50k requests per second, 100 per minute per key.\n"
+        "The candidate works at Globex.\n\n## Observations\n- 03:10 SECRET OBSERVATION: missed atomicity\n")
+    (s.dir / "messages.json").write_text(json.dumps([
+        {"id": 1, "role": "interviewer", "kind": "speech", "text": "Let's design a rate limiter for a public API.", "ts": 1},
+        {"id": 2, "role": "candidate", "kind": "speech", "text": "SECRET CANDIDATE SPEECH", "ts": 2}]))
     (s.dir / "transcript.md").write_text("SECRET TRANSCRIPT")
     return s
 
@@ -172,24 +190,56 @@ def test_video_runs_every_stage_in_order(fake, done_session):
 def test_script_worker_reads_only_bounded_inputs(fake, done_session):
     run(done_session, "diagram")
     call = fake.calls[0]
-    files = sorted(p.name for p in call["cwd"].iterdir())
-    assert files == ["brief.md", "emphasis.md", "format.md", "notes.md", "script.json"]
-    assert "SECRET TRANSCRIPT" not in "".join(p.read_text() for p in call["cwd"].iterdir())
-    assert call["tools"] == ["Read", "Write"] and call["allowed"] == ["Read", "Write"]
+    d = call["cwd"]
+    files = sorted(p.name for p in d.iterdir())
+    assert files == ["brief.md", "emphasis.md", "format.md", "scenario.md", "script.json"]
+    text = "".join(p.read_text() for p in d.iterdir())
+    # no transcript, verdict, evaluation free text, observations or personal details
+    for secret in ("SECRET", "lean hire", "Globex", "didn't land", "03:10"):
+        assert secret not in text, secret
+    emphasis = (d / "emphasis.md").read_text()
+    assert emphasis.index("Estimation") < emphasis.index("High-level architecture") < emphasis.index("Data model & APIs")
+    assert "Explain in depth" in emphasis and "Scalability & reliability" in emphasis.split("Cover clearly")[1]
+    scenario = (d / "scenario.md").read_text()
+    assert "Let's design a rate limiter" in scenario and "50k requests per second" in scenario
+    # tools and path-scoped permissions
+    assert call["tools"] == ["Read", "Write"]
+    root = "/" + str(d.resolve())
+    assert call["allow"] == [f"Read({root}/**)", f"Edit({root}/script.json)"]
     assert "Never name Acme" in call["system"]
-    assert "Explain token bucket refill" in (call["cwd"] / "emphasis.md").read_text()
+
+
+def test_scenario_without_sections_drops_remarks(fake, done_session):
+    (done_session.dir / "notes.md").write_text(
+        "Problem: URL shortener, 10M links a day.\nCandidate seemed nervous.\nThey asked about TTLs at 04:12.\n"
+        "Keys are 7 characters.\n## Observations so far\n- strong on estimates\n")
+    g = ma.Generation(done_session.dir, done_session.meta, lambda e: None, "diagram")
+    text = g.scenario()
+    assert "10M links a day" in text and "7 characters" in text
+    assert "nervous" not in text and "04:12" not in text and "strong on estimates" not in text
 
 
 def test_scene_workers_are_bounded(fake, done_session):
     run(done_session)
     scene_calls = [c for c in fake.calls if c["stage"] == "scenes"]
     assert len(scene_calls) == 2
+    work = done_session.dir / "model_answer" / "work"
+    root = "/" + str(work.resolve())
     for c in scene_calls:
         assert c["tools"] == ["Read", "Write", "Edit", "Bash"]
-        assert [a for a in c["allowed"] if a.startswith("Bash")] == ["Bash(node render.mjs beats:*)",
-                                                                       "Bash(node render.mjs preview:*)"]
+        assert c["allow"] == [f"Read({root}/**)", f"Edit({root}/scenes/**)",
+                              "Bash(node render.mjs beats:*)", "Bash(node render.mjs preview:*)"]
+        for f in ("render.mjs", "lib.js", "player.html", "reference.js", "BRIEF.md", ".render_limits.json"):
+            assert f"Write({root}/{f})" in c["deny"] and f"Edit({root}/{f})" in c["deny"]
         assert c["budget_usd"] <= (5.0 - 0.1) / 2 + 1e-9
-    work = done_session.dir / "model_answer" / "work"
+    for f in ("render.mjs", "lib.js", "player.html", "reference.js", "BRIEF.md", "script.json", "timings.json"):
+        assert not os.access(work / f, os.W_OK), f  # read-only on disk too
+    assert json.loads((work / ".render_limits.json").read_text()) == {"s01": 2, "s02": 2}
+    qa = next(c for c in fake.calls if c["stage"] == "qa")
+    assert qa["tools"] == ["Read", "Write"]
+    assert qa["allow"] == [f"Read({root}/out/qa/**)", f"Edit({root}/out/qa/qa.json)"]
+    assert qa["deny"] == [f"Read({root}/scenes/**)"]
+    assert "Render limit reached" in (work / "render.mjs").read_text()
     jobs = [json.loads(p.read_text()) for p in sorted((work / "jobs").glob("*.json"))]
     assert [[s["id"] for s in j["scenes"]] for j in jobs] == [["s01"], ["s02"]]
     assert {"start", "end", "say", "show"} <= set(jobs[0]["scenes"][0]["beats"][0])
@@ -225,7 +275,7 @@ def test_script_bounced_once_then_accepted(fake, done_session):
     script_calls = [c for c in fake.calls if c["stage"] == "script"]
     assert len(script_calls) == 2
     assert script_calls[1]["resume"] == "sess-1"
-    assert "candidate" in script_calls[1]["prompt"] and "forgot" in script_calls[1]["prompt"]
+    assert '"candidate" (refers to a candidate)' in script_calls[1]["prompt"]
 
 
 def test_script_bounced_once_then_fails(fake, done_session):
@@ -267,7 +317,7 @@ def test_budget_cap_aborts_cleanly(fake, done_session):
     assert "budget cap of $3.00" in state["error"]
     # each scene worker was capped at half of what was left
     assert all(c["budget_usd"] == pytest.approx(0.5) for c in fake.calls if c["stage"] == "scenes")
-    assert state["cost_usd"] == pytest.approx(6.0)
+    assert state["cost_usd"] in (pytest.approx(4.0), pytest.approx(6.0))  # the 2nd worker may not start at all
 
 
 def test_no_worker_starts_without_budget(fake, done_session):
@@ -347,7 +397,9 @@ def test_fixes_rerender_only_touched_scenes(fake, done_session):
     assert state["status"] == "done"
     assert fake.node.video_calls() == [["s01", "s02"], ["s02"]]
     fix = [c for c in fake.calls if c["stage"] == "fixes"]
-    assert len(fix) == 1 and fix[0]["resume"] == "sess-3"  # the worker that wrote s02
+    owner = next(w for w in state["workers"].values() if "s02" in w["scenes"])
+    assert len(fix) == 1 and fix[0]["resume"] == owner["session_id"]  # the worker that wrote s02
+    assert json.loads((done_session.dir / "model_answer" / "work" / ".render_limits.json").read_text())["s02"] == 1
     assert "says 200" in fix[0]["prompt"] and "tight" not in fix[0]["prompt"]
 
 
@@ -411,14 +463,92 @@ def test_run_claude_flags(monkeypatch, tmp_path):
             return json.dumps({"result": "ok", "total_cost_usd": 0.02, "session_id": "abc", "usage": {}}), ""
 
     monkeypatch.setattr(ma.subprocess, "Popen", P)
-    r = ma.run_claude(tmp_path, "go", system="sys", model="opus", tools=["Read", "Write"], allowed=["Read", "Write"],
+    r = ma.run_claude(tmp_path, "go", system="sys", model="opus", tools=["Read", "Write"],
+                      allow=["Read(//x/**)", "Write(//x/script.json)"], deny=["Write(//x/render.mjs)"],
                       budget_usd=1.234, resume="r1")
     a = seen["args"]
     assert a[:3] == ["claude", "-p", "go"]
     assert a[a.index("--setting-sources") + 1] == "" and "--strict-mcp-config" in a and "--bare" not in a
+    assert a[a.index("--permission-mode") + 1] == "default"  # unlisted actions are refused, never auto-accepted
+    i = a.index("--allowedTools")
+    assert a[i + 1:i + 3] == ["Read(//x/**)", "Write(//x/script.json)"]
+    assert a[a.index("--disallowedTools") + 1] == "Write(//x/render.mjs)"
+    t = a.index("--tools")
+    assert a[t + 1:t + 3] == ["Read", "Write"]
     assert a[a.index("--max-budget-usd") + 1] == "1.23"
     assert a[a.index("--resume") + 1] == "r1" and a[a.index("--model") + 1] == "opus"
     assert r["cost_usd"] == 0.02 and r["session_id"] == "abc" and not r["is_error"]
+    assert ma.path_rule("Read", tmp_path, "**") == f"Read(/{tmp_path.resolve()}/**)"
+
+
+def test_resumed_runs_count_only_their_own_cost(fake, done_session):
+    fake.scripts = [make_script(say_extra="The candidate should ask."), make_script()]
+    fake.cost = 0.25
+    state, _ = run(done_session, "diagram")
+    first, revision = [c for c in fake.calls if c["stage"] == "script"]
+    # Claude Code reports 0.50 for the resumed session (cumulative); only 0.25 is new
+    assert [r["cost_usd"] for r in state["runs"]] == [0.25, 0.25]
+    assert state["cost_usd"] == pytest.approx(0.5)
+    # and its --max-budget-usd is compared with the session's cumulative cost: prior + what's left
+    assert revision["budget_usd"] == pytest.approx(0.25 + (5.0 - 0.25))
+
+
+def test_fix_round_is_bounded_across_retries(fake, done_session):
+    fake.qa_issues = [{"scene": "s02", "t": 1.0, "severity": "high", "kind": "layout", "issue": "overlap", "fix": "move"}]
+    fake.node.fail_on = None
+    real = fake.node.__call__
+    calls = {"n": 0}
+
+    def fail_after_fix(cwd, args, **kw):
+        if args[0] == "video" and any(c["stage"] == "fixes" for c in fake.calls) and calls["n"] == 0:
+            calls["n"] += 1
+            raise ma.StageError("render.mjs video failed: boom")
+        return real(cwd, args, **kw)
+    import app.model_answer as mod
+    mod.run_node = fail_after_fix
+    state, _ = run(done_session)
+    assert state["status"] == "failed" and state["stages"]["fixes"]["status"] == "failed"
+    state, _ = run(done_session)
+    assert state["status"] == "done"
+    assert [c["stage"] for c in fake.calls].count("fixes") == 1  # the retry re-rendered, it didn't fix again
+    assert "already used" in state["stages"]["fixes"]["detail"]
+
+
+def test_qa_summary_counts_frames_in_code(fake, done_session, monkeypatch):
+    real = fake.node.__call__
+
+    def node(cwd, args, **kw):
+        real(cwd, args, **kw)
+        if args[0] == "qa":
+            (cwd / "out" / "qa" / "index.json").write_text(json.dumps([{"file": f"f{i}"} for i in range(7)]))
+    monkeypatch.setattr(ma, "run_node", node)
+    state, _ = run(done_session)
+    assert state["qa"]["frames"] == 7 and state["qa"]["summary"].startswith("7 frames reviewed")
+
+
+def test_diagram_falls_back_to_svg_when_png_render_fails(fake, done_session):
+    fake.node.fail_on = "svg"
+    state, _ = run(done_session, "diagram")
+    assert state["status"] == "done"
+    assert set(state["outputs"]) == {"script", "diagram_svg"}
+    assert "SVG only" in state["stages"]["diagram"]["detail"]
+
+
+def test_png_needs_no_ffmpeg(fake, done_session, monkeypatch):
+    monkeypatch.setattr(ma, "renderer_ready", lambda: None)
+    monkeypatch.setattr(ma.shutil, "which", lambda name: None if name == "ffmpeg" else "/usr/bin/" + name)
+    state, _ = run(done_session, "diagram")
+    assert "diagram_png" in state["outputs"]
+
+
+def test_pack_gating():
+    assert ma.allowed({"whiteboard": True}) and not ma.allowed({"whiteboard": False})
+    assert not ma.allowed({"whiteboard": True, "model_answer": False})
+    assert ma.allowed({"whiteboard": False, "model_answer": True})
+    beh = sessions.create_session("behavioural", "", "", "", "en", "haiku", "haiku", lambda e: None)
+    assert beh.meta["model_answer"] is False
+    sd = sessions.create_session("system-design", "", "", "", "en", "haiku", "haiku", lambda e: None)
+    assert sd.meta["model_answer"] is True
 
 
 # ------------------------------------------------------------------ script helpers
@@ -444,37 +574,65 @@ def test_validate_rejects(mutate, expected):
     assert any(expected in e for e in sc.validate(s, 2)), sc.validate(s, 2)
 
 
-@pytest.mark.parametrize("text", [
+FLAGGED = [
     "The candidate should have asked about scale.", "In this session we design a cache.",
     "A common mistake is to skip estimates.", "You said Redis, but", "Your answer missed the queue.",
-    "That would get a hire verdict.", "The feedback was clear.", "Scores matter here.",
-    "During the mock round", "El candidato olvidó la caché.", "the interviewer pushes on it",
-])
+    "That would get a hire verdict.", "The feedback was clear.", "During the mock round",
+    "the interviewer pushes on it", "A common pitfall in interviews", "In a system design interview, start here.",
+    "You never mentioned the cache.", "Earlier you talked about sharding.", "Here you went straight to the database.",
+    "Practice round recap", "That would get a strong yes.", "You scored a 3 here.",
+    "No mencionaste la caché.", "Te faltó la cola.", "Un error común es olvidar la caché.", "En esta entrevista",
+    "El candidato olvidó la caché.",
+]
+
+ALLOWED = [
+    "You'd want a queue here.", "The user session token expires after an hour.", "Store session state in Redis.",
+    "In Raft, a follower becomes a candidate and requests votes.", "El nodo pasa a candidato y pide votos.",
+    "Candidate keys identify a row.", "The candidate generation step retrieves 500 items.",
+    "Add a forgot password flow.", "A missed heartbeat triggers failover.", "The job missed its deadline.",
+    "A relevance score ranks results.", "La puntuación de relevancia ordena los resultados.",
+    "The session expires after 30 minutes.", "Mock the payment API in tests.", "A mock server helps testing.",
+    "User feedback loops improve ranking.", "Customers hire workers by the hour.", "Hiring managers review applicants.",
+    "If you said yes to every request, the queue would grow.", "Cache misses fall through to the database.",
+]
+
+
+@pytest.mark.parametrize("text", FLAGGED)
 def test_neutrality_flags(text):
     assert sc.check_text(text), text
 
 
-@pytest.mark.parametrize("text", [
-    "You'd want a queue here.", "The user session token expires after an hour.", "Store session state in Redis.",
-    "A relevance score ranks results.", "User feedback loops improve ranking.", "A mock server helps testing.",
-    "In a system design interview, start with requirements.", "Cache misses fall through to the database.",
-])
+@pytest.mark.parametrize("text", ALLOWED)
 def test_neutrality_allows_technical_language(text):
     assert sc.check_text(text) == [], sc.check_text(text)
+
+
+@pytest.mark.parametrize("variant", ["Acme Corp", "acme-corp", "AcmeCorp", "ACME.corp"])
+def test_company_variants(variant):
+    assert any("names the target company" in v for v in sc.check_text(f"{variant} does this", "AcmeCorp"))
+
+
+def test_scene_literals_keep_single_words():
+    src = 's += text({ t: "Verdict: hire" }); s += chip({ t: "Mock" }); s += chip({ t: "#5b9cff" });'
+    lits = sc.scene_literals(src)
+    assert "Verdict: hire" in lits and "Mock" in lits and "#5b9cff" not in lits
+    assert all(sc.check_text(x) for x in ("Verdict: hire", "Mock"))
 
 
 def test_neutrality_covers_every_published_field():
     s = make_script()
     s["diagram"]["nodes"][0]["label"] = "Candidate"
+    s["phases"][0]["label"] = "Mock round"
     s["assumptions"].append("Acme has 1M users")
     found = sc.neutrality(s, "Acme")
     assert any(f.startswith("diagram node c") for f in found)
+    assert any(f.startswith("phases[0].label") for f in found)
     assert any("Acme" in f for f in found)
 
 
 def test_scene_literals_pick_on_screen_words():
     src = 'const a = "#5b9cff"; s += text({ t: "Reads outnumber writes", size: 30 }); s += `<rect x="1"/>`;'
-    assert sc.scene_literals(src) == ["Reads outnumber writes"]
+    assert "Reads outnumber writes" in sc.scene_literals(src) and "#5b9cff" not in sc.scene_literals(src)
 
 
 def test_youtube_text_and_markdown():
@@ -494,9 +652,13 @@ def test_diagram_svg_is_well_formed():
 
 
 def test_estimates():
-    e_video, e_diagram = ma.estimate("video", SETTINGS | {"ma_scenes": 8}), ma.estimate("diagram", SETTINGS)
-    assert 0 < e_diagram["usd"][1] < e_video["usd"][0] * 2
-    assert e_video["usd"][0] < e_video["usd"][1] <= SETTINGS["ma_budget_usd"]
+    from app.config import DEFAULTS
+    e_video = ma.estimate("video", SETTINGS | {"ma_scenes": 8})
+    e_diagram = ma.estimate("diagram", SETTINGS | {"ma_scenes": 8})
+    assert 0 < e_diagram["usd"][1] < e_video["usd"][0]
+    # the default cap covers a pessimistic full video
+    assert e_video["usd"][0] < e_video["typical_usd"] < e_video["usd"][1] <= DEFAULTS["model_answer"]["budget_usd"]
+    assert 3 <= e_video["typical_usd"] <= 6 and 0.4 <= e_diagram["typical_usd"] <= 0.9
     assert set(e_diagram["tokens"]) == {"opus"}
     assert e_video["minutes"] == [17, 25]
 
@@ -530,5 +692,33 @@ def test_api_rules(fake, done_session, monkeypatch):
     state = c.get(f"/api/sessions/{done_session.id}/model-answer").json()["state"]
     assert state["status"] == "done"
     assert c.get(state["outputs"]["diagram_svg"]["url"]).text.startswith("<svg")
+    # cancel after the end is a no-op: it never deletes the result
+    r = c.post(f"/api/sessions/{done_session.id}/model-answer/cancel")
+    assert r.status_code == 200 and r.json()["cancelled"] is False
+    assert c.get(f"/api/sessions/{done_session.id}/model-answer").json()["state"]["status"] == "done"
     assert c.delete(f"/api/sessions/{done_session.id}/model-answer").status_code == 200
     assert c.get(f"/api/sessions/{done_session.id}/model-answer").json()["state"] is None
+
+    beh = sessions.create_session("behavioural", "", "", "", "en", "haiku", "haiku", lambda e: None)
+    (beh.dir / "feedback.json").write_text("{}")
+    r = c.post(f"/api/sessions/{beh.id}/model-answer", json={"mode": "diagram"})
+    assert r.status_code == 409 and "no model answer" in r.json()["detail"]
+    assert c.get(f"/api/sessions/{beh.id}/model-answer").json()["allowed"] is False
+
+
+def test_api_blocks_cpu_work_while_generating(fake, done_session, monkeypatch):
+    from fastapi.testclient import TestClient
+
+    from app import server
+    monkeypatch.setattr(server, "sessions", {})
+    busy = type("Busy", (), {"cancel": lambda self: None})()
+    monkeypatch.setattr(ma, "current", lambda: busy)
+    c = TestClient(server.app)
+    stopped = sessions.create_session("system-design", "", "", "", "en", "haiku", "haiku", lambda e: None)
+    stopped.meta["status"] = "ended"
+    stopped.save()
+    for path in ("resume", "end"):
+        r = c.post(f"/api/sessions/{stopped.id}/{path}", json={})
+        assert r.status_code == 409 and "model answer is being generated" in r.json()["detail"], path
+    r = c.post("/api/sessions", json={"pack": "system-design"})
+    assert r.status_code == 409

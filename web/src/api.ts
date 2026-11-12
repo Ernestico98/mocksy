@@ -66,6 +66,8 @@ export interface SessionMeta {
   phases: Phase[];
   rubric: string[];
   whiteboard?: boolean;
+  /** the pack allows a "Model answer" (missing in older sessions: follows `whiteboard`) */
+  model_answer?: boolean;
   model: string;
   feedback_model: string;
   effort?: string;
@@ -150,10 +152,17 @@ export interface ModelAnswerState {
   outputs: Partial<Record<"video" | "script" | "youtube" | "diagram_svg" | "diagram_png", { url: string; name: string }>>;
   chapters?: { t: number; title: string }[];
   duration_s?: number;
-  qa?: { issues: { scene: string; severity: string; kind: string; issue: string }[]; summary: string; fixed?: number };
+  qa?: { issues: { scene: string; severity: string; kind: string; issue: string }[]; summary: string; frames?: number; fixed?: number };
 }
 
-export interface Estimate { usd: [number, number]; minutes: [number, number]; tokens: Record<string, number>; budget_usd: number }
+export interface Estimate {
+  usd: [number, number];
+  typical_usd: number;
+  minutes: [number, number];
+  /** estimated tokens per model (mostly cache reads) */
+  tokens: Record<string, number>;
+  budget_usd: number;
+}
 
 export interface ModelAnswerStatus {
   state: ModelAnswerState | null;
@@ -161,6 +170,8 @@ export interface ModelAnswerStatus {
   ready: string | null;
   estimates: Record<ModelAnswerMode, Estimate>;
   settings: Partial<Settings>;
+  /** false when the session's interview type has no model answer */
+  allowed?: boolean;
 }
 
 export type ServerEvent =
@@ -230,8 +241,9 @@ export const api = {
   modelAnswer: (id: string) => request<ModelAnswerStatus>(`${s(id)}/model-answer`),
   startModelAnswer: (id: string, mode: ModelAnswerMode, fresh = false) =>
     request<ModelAnswerStatus>(`${s(id)}/model-answer`, { mode, fresh }),
-  /** cancels a running generation; otherwise deletes what was generated */
-  stopModelAnswer: (id: string) => request(`${s(id)}/model-answer`, undefined, "DELETE"),
+  cancelModelAnswer: (id: string) => request<{ ok: boolean; cancelled: boolean }>(`${s(id)}/model-answer/cancel`, {}),
+  /** deletes what was generated (refused while a generation runs) */
+  deleteModelAnswer: (id: string) => request(`${s(id)}/model-answer`, undefined, "DELETE"),
   /** `timing`: when the VAD ended the turn (performance.now()) and the pause it waited, for latency stats. */
   async transcribe(id: string, wav: Blob, timing?: { vadAt: number; silenceMs: number }): Promise<string> {
     const fd = new FormData();

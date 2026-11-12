@@ -124,9 +124,11 @@ how to solve it well, ready to publish (on YouTube, for example):
   chapter timestamps), the script as markdown, and a solution diagram (SVG + PNG).
 - **Diagram + write-up only**: just the script step and the diagram, no video. Much cheaper and faster.
 
-The evaluation only decides which concepts get more time. The output never mentions a candidate, the
-interview, mistakes, scores or a verdict, and doesn't name the target company unless you allow it in
-the settings. That's enforced three times: in the script prompt; by a check in code on the script
+The evaluation only decides which areas get more time: the script step gets the rubric dimensions
+ordered by score, never the evaluation's text, the transcript or anything personal, plus the problem as
+it was posed (the opening prompt and the scenario part of the interviewer's notes). The output never
+mentions a candidate, the interview, mistakes, scores or a verdict, and doesn't name the target company
+unless you allow it in the settings. That's enforced three times: in the script prompt; by a check in code on the script
 (it's sent back once with the violations, and the run fails if they remain); and by the review pass,
 which also checks on-screen text and numbers against the narration. Figures the script made up are
 listed as assumptions in the app, the markdown and the YouTube text.
@@ -135,17 +137,22 @@ listed as assumptions in the app, the markdown and the YouTube text.
 Fixes), with progress, cancel, and retry from the stage that stopped. Every model step is a fresh,
 bounded Claude Code process with a minimal tool set: one script worker (`opus` by default, the only
 judgment step) reads the evaluation, the interviewer's notes, the interview brief and a format
-reference, never the transcript; two scene workers (`sonnet`) each read only the scene brief, the
+reference; two scene workers (`sonnet`) each read only the scene brief, the
 drawing toolkit, one reference scene and their own beats, with at most 2 still-render rounds per
 scene; one review pass (`sonnet`) looks at end-of-beat frames at 960 px; one fix round, which
 re-renders only the scenes it touched. Voice (Kokoro, in the session's language), rendering (headless
-Chrome + ffmpeg) and packaging use no model.
+Chrome + ffmpeg) and packaging use no model. Workers are confined by path-scoped permission rules: each can
+read only its own folder and write only its output (the scene files, `script.json`, `qa.json`); the
+renderer and toolkit are read-only, and the renderer refuses more than the allowed render rounds.
 
 **Cost.** Each run's cost and tokens are recorded, the running total is shown, and a budget cap
-(default $5, API-equivalent as Claude Code reports it) stops the generation cleanly. The confirm dialog
-estimates about $0.75-2.10 and 17-25 minutes for a video, and $0.35-1 and 2-5 minutes for the diagram
-only. On a subscription a video stays within about half of a session window. Models per stage, the
-cap, the scene count, the fix round and the company setting are under **Model answer settings**.
+(default $10, API-equivalent as Claude Code reports it) stops the generation cleanly. The estimates come
+from token usage measured on real runs: about $3-6.50 (typically ~$4, ~2.4M tokens, mostly cache reads)
+and 17-25 minutes for an 8-scene video, and $0.40-0.90 and 2-5 minutes for the diagram only. Models per
+stage, the cap, the scene count, the fix round and the company setting are under **Model answer settings**.
+
+It's offered for rounds with a whiteboard. A pack can opt in or out with `model_answer = true/false` in
+its header; the behavioural pack opts out, since a model answer of personal stories makes no sense.
 
 **You'll need** (video only) Node, ffmpeg and Chrome: `scripts/setup.sh` installs the renderer and,
 without a system Chrome or Chromium, downloads Playwright's headless Chromium. In Docker, build with

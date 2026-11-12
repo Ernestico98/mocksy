@@ -59,15 +59,23 @@ are spoken with local Kokoro TTS. At the end a second Claude call writes the eva
 ## Model answer (see README for the user view)
 - Modes: `video` (script → diagram → voice → scenes → render → qa → fixes → package) and `diagram` (script →
   diagram → package). Retry continues from the first stage not done; a video run reuses a diagram run's script.
-- Cost bounds (required): one script worker (opus) reading only `brief.md`, `emphasis.md` (from feedback.json),
-  `notes.md`, `format.md` (never the transcript); two scene workers (sonnet) reading only BRIEF.md, their job file,
+- Cost bounds (required): one script worker (opus) reading only `brief.md`, `emphasis.md` (rubric dimensions
+  ordered by score: never free text from the evaluation), `scenario.md` (opening prompt + the `## Scenario` part of
+  notes.md, remarks about the person dropped), `format.md` (never the transcript); two scene workers (sonnet) reading only BRIEF.md, their job file,
   lib.js, reference.js, ≤2 still-render rounds per scene, Bash limited to `node render.mjs beats|preview`; one QA
   pass (sonnet) on 960 px end-of-beat frames; one fix round (`--resume` of the scene worker); no second QA.
-  The backend never reads images. Every worker gets `--max-budget-usd` = what's left of the cap.
+  The backend never reads images. Every worker gets `--max-budget-usd` = what's left of the cap (plus, on
+  `--resume`, what the session already cost: Claude Code reports and caps resumed sessions cumulatively; only the
+  delta is recorded). One fix round in total (`fix_rounds_used` survives retries); the work folder's `render.mjs`
+  shim counts render rounds per scene (`.render_limits.json`: 2, +1 per fix).
+- Isolation: `--permission-mode default` + path rules (`Read(//abs/**)`, writes via `Edit(//abs/file)`: `Write(...)`
+  path rules grant nothing) + deny rules for the toolkit files, which are also read-only on disk.
+- Packs: `model_answer = false` hides the tab and the API refuses (default: follows `whiteboard`).
 - Publishing rules: the script is a neutral explainer (no candidate, interview session, mock, mistakes, score,
   feedback, verdict, company name unless `ma_name_company`). `explainer/script.py:neutrality` runs on script.json
   (one bounce, then fail) and on scene string literals (fed to QA/fixes, fail if they remain); QA checks frames.
-- One generation at a time; blocked while an interview is live, and new interviews are blocked while it runs.
+- One generation at a time; blocked while an interview is live, and new/resumed interviews and re-evaluations are
+  blocked while it runs.
 - Tests: `tests/test_model_answer.py` (fake Claude + fake renderer), `tests/test_explainer_render.py` (real
   Chrome/ffmpeg, skipped without them), `MOCKSY_LIVE=1 tests/test_live_model_answer.py` (2 scenes, haiku, ~$0.1).
 

@@ -35,10 +35,15 @@ def test_short_real_video(monkeypatch):
                                 problem="Design a rate limiter for a public API")
     s.meta["status"] = "done"
     s.save()
-    (s.dir / "notes.md").write_text("Scenario: rate limiter for a public REST API, 50k requests per second at peak, "
-                                    "limits per API key, several gateway instances.")
+    (s.dir / "notes.md").write_text("## Scenario\nRate limiter for a public REST API, 50k requests per second at peak, "
+                                    "limits per API key, several gateway instances.\n\n## Observations\n"
+                                    "- 04:10 the candidate missed atomicity\n")
+    (s.dir / "messages.json").write_text(json.dumps([{"id": 1, "role": "interviewer", "kind": "speech", "ts": 1,
+                                                      "text": "Let's design a rate limiter for our public API."}]))
     (s.dir / "feedback.json").write_text(json.dumps({
         "verdict": "lean hire", "summary": "Reasonable design.",
+        "scores": {"Requirements & scoping": 4, "Estimation": 3, "High-level architecture": 4, "Data model & APIs": 3,
+                   "Scalability & reliability": 2, "Trade-offs & communication": 3},
         "top3": ["Explain why the counter must be shared across gateway instances", "Compare token bucket and sliding window"],
         "review": [{"id": 4, "topic": "Atomicity", "what": "Use an atomic INCR with expiry (or a Lua script) in Redis."}],
         "report": "## Verdict\nLean hire.\n## Top 3\n- shared counters\n- algorithms\n- failure mode when Redis is down"}))
@@ -53,6 +58,12 @@ def test_short_real_video(monkeypatch):
     print("  QA issues:", len((st.get("qa") or {}).get("issues", [])))
     assert st["status"] == "done", st["error"]
     assert st["cost_usd"] <= BUDGET
+    inputs = "".join(p.read_text() for p in (g.dir / "script").iterdir() if p.suffix == ".md")
+    assert "lean hire" not in inputs.lower() and "missed atomicity" not in inputs and "04:10" not in inputs
+    # the toolkit stayed untouched and render rounds stayed within 2 per scene
+    assert (g.work / "render.mjs").read_text().startswith("// Runs the shared renderer")
+    counts = json.loads((g.work / ".render_counts.json").read_text()) if (g.work / ".render_counts.json").exists() else {}
+    assert all(v <= 3 for v in counts.values()), counts
 
     d = g.dir
     for f in ("model-answer.mp4", "youtube.txt", "script.md", "diagram.svg", "diagram.png"):
