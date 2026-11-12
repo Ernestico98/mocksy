@@ -77,3 +77,20 @@ def test_render_reference_scene(tmp_path):
 def test_render_error_is_reported(tmp_path):
     with pytest.raises(ma.StageError, match="render.mjs preview failed"):
         ma.run_node(tmp_path, ["preview", "nope", "1"])
+
+
+def test_shim_enforces_render_rounds(tmp_path):
+    work = tmp_path / "work"
+    (work / "scenes").mkdir(parents=True)
+    shutil.copy(ma.EXPLAINER / "reference.js", work / "scenes" / "ref.js")
+    (work / "script.json").write_text(json.dumps({"title": "T", "phases": [], "scenes": [
+        {"id": "ref", "phase": "x", "title": "Ref", "beats": [{"say": "a", "show": ""}] * 3}]}))
+    (work / "timings.json").write_text(json.dumps({"ref": {"duration": 1.5, "beats": [
+        {"start": 0.1, "end": 0.5, "say": "a"}, {"start": 0.6, "end": 1.0, "say": "b"}, {"start": 1.1, "end": 1.4, "say": "c"}]}}))
+    (work / "render.mjs").write_text(ma.SHIM.replace("RENDERER_URL", json.dumps((ma.EXPLAINER / "render.mjs").as_uri())))
+    (work / ".render_limits.json").write_text(json.dumps({"ref": 2}))
+    run = lambda: subprocess.run(["node", "render.mjs", "preview", "ref", "1"], cwd=work, capture_output=True, text=True)  # noqa: E731
+    assert run().returncode == 0 and run().returncode == 0
+    third = run()
+    assert third.returncode == 3 and "Render limit reached for ref" in third.stderr
+    assert json.loads((work / ".render_counts.json").read_text()) == {"ref": 2}

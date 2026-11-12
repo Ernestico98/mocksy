@@ -54,10 +54,14 @@ WORKER_TIMEOUT = 40 * 60
 
 # Estimates. USD per million tokens: input, output, cache read, cache write (Claude Code caches for 1 h).
 PRICES = {"opus": (4, 20, 0.2, 8), "sonnet": (2, 10, 0.2, 4), "haiku": (0.1, 0.5, 0.01, 0.2), "fable": (10, 50, 0.25, 20)}
-# Tokens per stage (cache write, cache read, output) for an 8-scene video, from the prototype runs that set the
-# cost bounds: ~57k Opus tokens for the script and ~300k Sonnet tokens (mostly cache reads) for scenes, QA, fixes.
-PROFILE = {"script": (30_000, 15_000, 12_000), "scenes": (30_000, 170_000, 20_000),
-           "qa": (25_000, 40_000, 4_000), "fixes": (5_000, 30_000, 5_000)}
+# Tokens (cache write, cache read, output) measured on real runs (state.json "runs"): a scene worker used
+# 25-52k / 116-224k / 6-21k for ONE scene; the script ~10k / 10k / 4k for 2 scenes (opus writes longer: budgeted
+# at 15k output for 8); QA ~1.2k / 2.4k / 0.25k per frame (about 4 frames per scene); a fix touches ~40% of
+# the scenes at about half a scene's cost each.
+PROFILE = {"script": ((30_000, 15_000, 15_000), 0),           # (fixed, per scene)
+           "scenes": ((0, 0, 0), (40_000, 180_000, 14_000)),
+           "qa": ((5_000, 5_000, 500), (5_000, 10_000, 1_000)),
+           "fixes": ((0, 0, 0), (8_000, 36_000, 2_800))}
 MINUTES = {"video": (17, 25), "diagram": (2, 5)}
 
 
@@ -79,12 +83,26 @@ class Busy(Exception):
 
 # ------------------------------------------------------------------ processes (patched in tests)
 
-def run_claude(cwd: Path, prompt: str, *, system: str, model: str, tools: list[str], allowed: list[str],
-               budget_usd: float, resume: str | None = None, on_start: Callable | None = None) -> dict:
-    """One bounded Claude Code run. Returns result, cost_usd, usage, session_id, is_error, subtype."""
+def path_rule(tool: str, path: Path, glob: str = "") -> str:
+    """A permission rule for an absolute path ("//" prefix in Claude Code rules). Writes are granted with
+    `Edit(...)` rules, which cover every file-writing tool (`Write(...)` path rules don't grant anything)."""
+    return f"{tool}(/{path.resolve()}{'/' + glob if glob else ''})"
+
+
+def run_claude(cwd: Path, prompt: str, *, system: str, model: str, tools: list[str], allow: list[str],
+               deny: list[str] = (), budget_usd: float, resume: str | None = None,
+               on_start: Callable | None = None) -> dict:
+    """One bounded Claude Code run. Returns result, cost_usd, usage, session_id, is_error, subtype.
+
+    `tools` is the only tool set the model sees; `allow` and `deny` are permission rules scoped to paths.
+    In the default permission mode a non-interactive run refuses everything the rules don't allow, so a
+    worker can't read or write outside its folder. `budget_usd` is passed to --max-budget-usd as is
+    (for a resumed session the caller adds what the session already cost)."""
     args = ["claude", "-p", prompt, "--output-format", "json", "--model", model, "--system-prompt", system,
-            "--tools", *tools, "--allowedTools", *allowed, "--permission-mode", "acceptEdits",
+            "--tools", *tools, "--allowedTools", *allow, "--permission-mode", "default",
             "--setting-sources", "", "--strict-mcp-config", "--max-budget-usd", f"{max(budget_usd, 0.01):.2f}"]
+    if deny:
+        args += ["--disallowedTools", *deny]
     if resume:
         args += ["--resume", resume]
     t0 = time.time()
@@ -130,15 +148,29 @@ def run_node(cwd: Path, args: list[str], *, env: dict | None = None, on_line: Ca
         raise StageError(f"render.mjs {args[0]} failed: {''.join(err)[-600:].strip() or proc.returncode}")
 
 
-def explainer_ready() -> str | None:
-    """Why the video can't be rendered here (None: it can)."""
+def renderer_ready() -> str | None:
+    """Why frames and PNGs can't be rendered here (None: they can, if a browser is found)."""
     if not shutil.which("node"):
         return "Node.js isn't installed (needed to render the video)."
-    if not shutil.which("ffmpeg"):
-        return "ffmpeg isn't installed (needed to encode the video)."
     if not (EXPLAINER / "node_modules" / "playwright-core").exists():
         return "The renderer isn't installed: run scripts/setup.sh (or `cd app/explainer && pnpm install`)."
     return None
+
+
+def explainer_ready() -> str | None:
+    """Why the video can't be made here (None: it can)."""
+    if reason := renderer_ready():
+        return reason
+    if not shutil.which("ffmpeg"):
+        return "ffmpeg isn't installed (needed to encode the video)."
+    return None
+
+
+def allowed(meta: dict) -> bool:
+    """Packs opt out with `model_answer = false`; the default follows `whiteboard` (a model answer of a
+    conversation-only round, such as personal stories, makes no sense and would expose personal details)."""
+    v = meta.get("model_answer")
+    return bool(v) if isinstance(v, bool) else meta.get("whiteboard", True) is not False
 
 
 # ------------------------------------------------------------------ estimates
@@ -148,24 +180,23 @@ def _price(model: str):
 
 
 def estimate(mode: str, settings: dict) -> dict:
-    scale = int(settings["ma_scenes"]) / 8
+    n = int(settings["ma_scenes"])
     models = {"script": settings["ma_script_model"], "scenes": settings["ma_scene_model"],
               "qa": settings["ma_qa_model"], "fixes": settings["ma_scene_model"]}
     usd, tokens = 0.0, {}
     for stage in (["script"] if mode == "diagram" else list(PROFILE)):
-        write, read, out = PROFILE[stage]
-        if stage != "script":
-            write, read, out = write * scale, read * scale, out * scale
         if stage == "fixes" and int(settings["ma_fix_rounds"]) < 1:
             continue
-        pin, pout, pread, pwrite = _price(models[stage])
+        fixed, per = PROFILE[stage]
+        write, read, out = (f + (per[i] * n if per else 0) for i, f in enumerate(fixed))
+        _, pout, pread, pwrite = _price(models[stage])
         usd += (write * pwrite + read * pread + out * pout) / 1e6
         tokens[models[stage]] = tokens.get(models[stage], 0) + round(write + read + out)
     lo, hi = MINUTES[mode]
     if mode == "video":
-        lo, hi = round(lo * (0.5 + scale / 2)), round(hi * (0.5 + scale / 2))
-    return {"usd": [round(usd * 0.7, 2), round(usd * 2, 2)], "minutes": [lo, hi], "tokens": tokens,
-            "budget_usd": float(settings["ma_budget_usd"])}
+        lo, hi = round(lo * (0.5 + n / 16)), round(hi * (0.5 + n / 16))
+    return {"usd": [round(usd * 0.75, 2), round(usd * 1.6, 2)], "typical_usd": round(usd, 2), "minutes": [lo, hi],
+            "tokens": tokens, "budget_usd": float(settings["ma_budget_usd"])}
 
 
 # ------------------------------------------------------------------ state
@@ -275,21 +306,28 @@ class Generation:
             f"(${self.state['cost_usd']:.2f} spent). Raise the cap in the settings and retry, or start over.")
 
     def worker(self, stage: str, name: str, cwd: Path, prompt: str, system: str, model: str, tools: list[str],
-               allowed: list[str], resume: str | None = None, share: int = 1) -> dict:
+               allow: list[str], deny: list[str] = (), resume: str | None = None, share: int = 1) -> dict:
         self.check()
         if self.remaining() < 0.01:
             raise self.budget_error()
-        r = run_claude(cwd, prompt, system=system, model=model, tools=tools, allowed=allowed,
-                       budget_usd=self.remaining() / share, resume=resume, on_start=self.track)
+        # Claude Code reports (and caps) a resumed session's cost cumulatively: count only this run's share
+        costs = self.state.setdefault("session_costs", {})
+        prior = costs.get(resume, 0.0) if resume else 0.0
+        r = run_claude(cwd, prompt, system=system, model=model, tools=tools, allow=allow, deny=list(deny),
+                       budget_usd=prior + self.remaining() / share, resume=resume, on_start=self.track)
+        reported = r["cost_usd"]
+        cost = reported - prior if resume and reported >= prior else reported
         u = r.get("usage") or {}
         with self.lock:
+            if r.get("session_id"):
+                costs[r["session_id"]] = round(prior + cost, 6)
             self.state["runs"].append({
-                "stage": stage, "worker": name, "model": model, "cost_usd": round(r["cost_usd"], 4),
+                "stage": stage, "worker": name, "model": model, "cost_usd": round(cost, 4), "resumed": bool(resume),
                 "session_id": r.get("session_id"), "duration_s": r.get("duration_s"), "subtype": r.get("subtype"),
                 "usage": {k: u.get(k, 0) for k in ("input_tokens", "output_tokens", "cache_read_input_tokens",
                                                    "cache_creation_input_tokens")},
             })
-            self.state["cost_usd"] = round(self.state["cost_usd"] + r["cost_usd"], 4)
+            self.state["cost_usd"] = round(self.state["cost_usd"] + cost, 4)
         self.save()
         self.check()
         if "budget" in (r.get("subtype") or "") or self.remaining() < 0:
@@ -335,27 +373,64 @@ class Generation:
         m = self.meta
         pack = pack_snapshot(m)
         phases = "\n".join(f"- {p['label']} ({p['minutes']} min)" for p in m.get("phases", []))
-        return (f"# Problem\n\nRequested problem: {m.get('problem') or 'not fixed in advance: notes.md has the one that was used'}\n"
+        return (f"# Problem\n\nRequested problem: {m.get('problem') or 'not fixed in advance: scenario.md has the one that was used'}\n"
                 f"Level: {m.get('level') or 'not specified'}\nFocus: {m.get('focus') or 'none'}\n"
                 f"Narration language: {LANGUAGES.get(m['lang'], m['lang'])}\n\n"
                 f"# Phases of the round (structure the explainer the same way)\n\n{phases}\n\n"
                 f"# The round, as briefed to the interviewer (context only)\n\n{pack['body']}\n")
 
     def emphasis(self) -> str:
+        """Which areas get more time, built in code from the pack's rubric and the scores: never free text from
+        the evaluation (it has the verdict, quotes and personal details)."""
         try:
-            fb = json.loads((self.sdir / "feedback.json").read_text())
+            scores = json.loads((self.sdir / "feedback.json").read_text()).get("scores") or {}
+        except (OSError, ValueError, AttributeError):
+            scores = {}
+        rubric = list(self.meta.get("rubric") or pack_snapshot(self.meta).get("rubric") or scores)
+        weak = sorted((k for k in rubric if not isinstance(scores.get(k), (int, float)) or scores[k] <= 3),
+                      key=lambda k: scores[k] if isinstance(scores.get(k), (int, float)) else 3.5)  # unobserved after low
+        out = ["# Areas to cover", "Cover every area below; give the first list the most explanation time.", ""]
+        if weak:
+            out += ["## Explain in depth", *[f"- {k}" for k in weak], ""]
+        out += ["## Cover clearly", *[f"- {k}" for k in rubric if k not in weak]]
+        return "\n".join(out).rstrip() + "\n"
+
+    OBSERVATION = re.compile(r"observ|timeline|progress|signal|assess|evaluat|so far|strength|weak|rubric|verdict|"
+                             r"did well|went well|missed|struggl|impression|summary|log\b", re.I)
+
+    def scenario(self) -> str:
+        """The problem as it was posed: the opening prompt plus the scenario part of the interviewer's notes
+        (its hidden context and numbers), never the observations about the candidate."""
+        opening = next((m["text"] for m in self.session_messages() if m.get("role") == "interviewer"
+                        and m.get("kind") == "speech" and m.get("text")), "")
+        notes = ""
+        try:
+            notes = (self.sdir / "notes.md").read_text()
+        except OSError:
+            pass
+        sections = re.split(r"(?m)^(?=#{1,3} )", notes)
+        scen = [x for x in sections if re.match(r"#{1,3} .*(scenario|problem|hidden|context|plan)", x, re.I)
+                and not self.OBSERVATION.search(x.splitlines()[0])]
+        kept = []
+        for line in ("".join(scen) if scen else notes).splitlines():
+            if self.OBSERVATION.search(line) and line.lstrip().startswith("#"):
+                break  # observations start here
+            if (re.search(r"\b\d{1,2}:\d{2}\b|\bcandidate|\b(they|he|she|their|his|her)\b", line, re.I)
+                    or sc.check_text(line)):
+                continue  # timestamps and remarks about the person
+            kept.append(line)
+        out = ["# Scenario", ""]
+        if opening:
+            out += ["Opening prompt, as it was posed:", f"> {opening.strip()}", ""]
+        if "".join(kept).strip():
+            out += ["Hidden context and numbers:", "\n".join(kept).strip()]
+        return "\n".join(out).rstrip() + "\n"
+
+    def session_messages(self) -> list[dict]:
+        try:
+            return json.loads((self.sdir / "messages.json").read_text())
         except (OSError, ValueError):
-            fb = {}
-        out = ["# What to emphasise",
-               "Use this only to decide which concepts get the most explanation time. Never refer to it, "
-               "to anyone's attempt, or to how it went.", ""]
-        if fb.get("top3"):
-            out += ["## Concepts to explain thoroughly", *[f"- {t}" for t in fb["top3"]], ""]
-        if fb.get("review"):
-            out += ["## Topics worth a clear model explanation", *[f"- {r.get('topic')}: {r.get('what')}" for r in fb["review"]], ""]
-        if fb.get("report"):
-            out += ["## Review notes", fb["report"]]
-        return "\n".join(out) + "\n"
+            return []
 
     def script_prompt(self) -> str:
         n = int(self.settings["ma_scenes"])
@@ -392,20 +467,20 @@ class Generation:
         d.mkdir(exist_ok=True)
         (d / "brief.md").write_text(self.brief())
         (d / "emphasis.md").write_text(self.emphasis())
-        notes = self.sdir / "notes.md"
-        if notes.exists():
-            shutil.copy(notes, d / "notes.md")
+        (d / "notes.md").unlink(missing_ok=True)  # older versions copied the raw notes
+        (d / "scenario.md").write_text(self.scenario())
         shutil.copy(PROMPTS_X / "format.md", d / "format.md")
         (d / "script.json").unlink(missing_ok=True)
         system, model = self.script_prompt(), self.settings["ma_script_model"]
         tools = ["Read", "Write"]
-        r = self.worker("script", "script", d, "Write script.json now.", system, model, tools, tools)
+        allow = [path_rule("Read", d, "**"), path_rule("Edit", d / "script.json")]
+        r = self.worker("script", "script", d, "Write script.json now.", system, model, tools, allow)
         problems = self.check_script(d)
         if problems:
             self.stage("script", detail=f"{len(problems)} problem(s): one revision")
             msg = ("script.json was rejected. Fix every problem below, write script.json again, then reply with "
                    "one line.\n" + "\n".join(f"- {p}" for p in problems[:40]))
-            self.worker("script", "script revision", d, msg, system, model, tools, tools, resume=r.get("session_id"))
+            self.worker("script", "script revision", d, msg, system, model, tools, allow, resume=r.get("session_id"))
             problems = self.check_script(d)
             if problems:
                 raise StageError("The script still breaks the rules after one revision:\n"
@@ -424,12 +499,18 @@ class Generation:
         (self.dir / "diagram.svg").write_text(sc.diagram_svg(data["diagram"]))
         outputs = self.state.setdefault("outputs", {})
         outputs["diagram_svg"] = "diagram.svg"
-        reason = explainer_ready()
-        if reason:
-            self.stage("diagram", detail=f"SVG only: {reason}")
-            return
-        run_node(self.dir, ["svg", "diagram.svg", "diagram.png"], env=self.node_env(), on_start=self.track)
-        outputs["diagram_png"] = "diagram.png"
+        (self.dir / "diagram.png").unlink(missing_ok=True)
+        outputs.pop("diagram_png", None)
+        reason = renderer_ready()
+        if not reason:
+            try:
+                run_node(self.dir, ["svg", "diagram.svg", "diagram.png"], env=self.node_env(), on_start=self.track)
+                outputs["diagram_png"] = "diagram.png"
+                return
+            except StageError as e:
+                self.check()
+                reason = str(e).splitlines()[0][:200]
+        self.stage("diagram", detail=f"SVG only (no PNG: {reason})")
 
     def node_env(self) -> dict:
         return {"EXPLAINER_CHROME": str(self.settings.get("ma_chrome") or "auto")}
@@ -458,7 +539,7 @@ class Generation:
             sf.write(audio / f"{scene['id']}.wav", wav, sr)
             timings[scene["id"]] = {"duration": round(len(wav) / sr, 3), "beats": beats}
             self.stage("voice", progress=(n + 1) / len(data["scenes"]), detail=f"{n + 1}/{len(data['scenes'])} scenes")
-        (self.work / "timings.json").write_text(json.dumps(timings, indent=1, ensure_ascii=False))
+        self.write_protected("timings.json", json.dumps(timings, indent=1, ensure_ascii=False))
         total = sum(s["duration"] for s in timings.values())
         self.state["duration_s"] = round(total, 1)
         self.stage("voice", detail=f"{sc.clock(total)} of narration")
@@ -466,20 +547,49 @@ class Generation:
     def timings(self) -> dict:
         return json.loads((self.work / "timings.json").read_text())
 
+    # Files the scene workers run or read but must never change (also made read-only on disk)
+    PROTECTED = ("render.mjs", "lib.js", "player.html", "reference.js", "BRIEF.md", "script.json", "timings.json",
+                 ".render_limits.json", ".render_counts.json")
+
+    def write_protected(self, name: str, text: str):
+        f = self.work / name
+        if f.exists():
+            f.chmod(0o644)
+        f.write_text(text)
+        f.chmod(0o444)
+
     def prepare_work(self):
         (self.work / "scenes").mkdir(parents=True, exist_ok=True)
         (self.work / "jobs").mkdir(exist_ok=True)
         for f in ("BRIEF.md", "lib.js", "reference.js", "player.html"):
-            shutil.copy(EXPLAINER / f, self.work / f)
-        (self.work / "render.mjs").write_text(
-            f"// Runs the shared renderer on this folder (see BRIEF.md).\nimport {json.dumps((EXPLAINER / 'render.mjs').as_uri())};\n")
-        shutil.copy(self.dir / "script.json", self.work / "script.json")
+            self.write_protected(f, (EXPLAINER / f).read_text())
+        self.write_protected("render.mjs", SHIM.replace("RENDERER_URL", json.dumps((EXPLAINER / "render.mjs").as_uri())))
+        self.write_protected("script.json", (self.dir / "script.json").read_text())
+        self.write_protected("timings.json", (self.work / "timings.json").read_text())
+
+    def grant_renders(self, scene_ids: list[str], rounds: int):
+        """Lets the shim run `node render.mjs beats|preview <id>` `rounds` more times for these scenes."""
+        def load(name):
+            try:
+                return json.loads((self.work / name).read_text())
+            except (OSError, ValueError):
+                return {}
+        counts, limits = load(".render_counts.json"), load(".render_limits.json")
+        for i in scene_ids:
+            limits[i] = counts.get(i, 0) + rounds
+        self.write_protected(".render_limits.json", json.dumps(limits))
 
     def scene_system(self) -> str:
         return (PROMPTS_X / "scene.md").read_text()
 
     SCENE_TOOLS = ["Read", "Write", "Edit", "Bash"]
-    SCENE_ALLOWED = ["Read", "Write", "Edit", "Bash(node render.mjs beats:*)", "Bash(node render.mjs preview:*)"]
+
+    def scene_rules(self) -> tuple[list[str], list[str]]:
+        w = self.work
+        allow = [path_rule("Read", w, "**"), path_rule("Edit", w / "scenes", "**"),
+                 "Bash(node render.mjs beats:*)", "Bash(node render.mjs preview:*)"]
+        deny = [path_rule(t, w / f) for f in self.PROTECTED for t in ("Write", "Edit")]
+        return allow, deny
 
     def stage_scenes(self):
         self.prepare_work()
@@ -499,6 +609,7 @@ class Generation:
                                          for j, b in enumerate(s["beats"])]} for s in group]}
             (self.work / "jobs" / f"{name}.json").write_text(json.dumps(job, indent=1, ensure_ascii=False))
             jobs.append((name, [s["id"] for s in group]))
+        self.grant_renders([s["id"] for s in missing], 2)  # at most 2 still-render rounds per scene
 
         errors: list[Exception] = []
         done = threading.Event()
@@ -509,7 +620,7 @@ class Generation:
                       "scene), then report.")
             try:
                 r = self.worker("scenes", name, self.work, prompt, self.scene_system(), self.settings["ma_scene_model"],
-                                self.SCENE_TOOLS, self.SCENE_ALLOWED, share=len(jobs))
+                                self.SCENE_TOOLS, *self.scene_rules(), share=len(jobs))
                 with self.lock:
                     workers[name] = {"session_id": r.get("session_id"), "scenes": scene_ids}
             except Exception as e:  # noqa: BLE001
@@ -587,11 +698,13 @@ class Generation:
     def stage_qa(self):
         run_node(self.work, ["qa"], env=self.node_env(), on_start=self.track)
         ids = [s["id"] for s in self.script()["scenes"]]
-        found = [self.work / "qa.json", self.work / "out" / "qa" / "qa.json"]  # the second: a common slip
+        found = [self.work / "out" / "qa" / "qa.json"]
         for f in found:
             f.unlink(missing_ok=True)
+        allow = [path_rule("Read", self.work / "out" / "qa", "**"), path_rule("Edit", self.work / "out" / "qa" / "qa.json")]
+        deny = [path_rule("Read", self.work / "scenes", "**")]
         self.worker("qa", "qa", self.work, "Review the frames now.", (PROMPTS_X / "qa.md").read_text(),
-                    self.settings["ma_qa_model"], ["Read", "Write"], ["Read", "Write"])
+                    self.settings["ma_qa_model"], ["Read", "Write"], allow, deny)
         try:
             qa = json.loads(next((f for f in found if f.exists()), found[0]).read_text())
         except (OSError, ValueError) as e:
@@ -604,24 +717,30 @@ class Generation:
                            "severity": i.get("severity") if i.get("severity") in ("high", "medium", "low") else "medium",
                            "kind": i.get("kind") or "other", "issue": str(i.get("issue", ""))[:400],
                            "fix": str(i.get("fix", ""))[:400]})
-        for sid, found in (self.state.get("scene_flags") or {}).items():
-            for f in found:
+        for sid, flagged in (self.state.get("scene_flags") or {}).items():
+            for f in flagged:
                 issues.append({"scene": sid, "t": None, "severity": "high", "kind": "neutrality",
                                "issue": f"On-screen text breaks the publishing rules: {f}",
                                "fix": "Reword it as a neutral explanation of the topic."})
-        self.state["qa"] = {"issues": issues, "summary": str((qa or {}).get("summary", ""))[:300]}
+        try:  # counted here, not taken from the model's own summary
+            frames = len(json.loads((self.work / "out" / "qa" / "index.json").read_text()))
+        except (OSError, ValueError):
+            frames = 0
         counts = {s: sum(i["severity"] == s for i in issues) for s in ("high", "medium", "low")}
-        self.stage("qa", detail=", ".join(f"{v} {k}" for k, v in counts.items() if v) or "no issues")
+        found = ", ".join(f"{v} {k}" for k, v in counts.items() if v) or "no issues"
+        self.state["qa"] = {"issues": issues, "frames": frames, "summary": f"{frames} frames reviewed: {found}."}
+        self.stage("qa", detail=found)
 
     def stage_fixes(self):
-        if int(self.settings["ma_fix_rounds"]) < 1:
-            self.stage("fixes", detail="turned off in settings")
-            return
         issues = [i for i in (self.state.get("qa") or {}).get("issues", [])
                   if i["severity"] in FIX_SEVERITIES or i["kind"] == "neutrality"]
-        if not issues:
-            self.stage("fixes", detail="nothing to fix")
+        used, rounds = self.state.get("fix_rounds_used", 0), int(self.settings["ma_fix_rounds"])
+        if not issues or used >= rounds:  # one fix round in total, retries included
+            self.finish_fixes(issues, "nothing to fix" if not issues else
+                              "turned off in settings" if rounds < 1 else "the fix round was already used")
             return
+        self.state["fix_rounds_used"] = used + 1
+        self.save()
         workers = self.state.get("workers", {})
         owner = {s: name for name, w in workers.items() for s in w["scenes"]}
         by_worker: dict[str, list[dict]] = {}
@@ -634,18 +753,20 @@ class Generation:
             lines = "\n".join(f"- {i['scene']}" + (f" at {i['t']}s" if i.get("t") is not None else "")
                               + f" ({i['severity']}, {i['kind']}): {i['issue']} Fix: {i['fix']}" for i in items)
             msg = (f"A review of the rendered frames found these problems in {', '.join(scenes)}. Fix them by editing only "
-                   f"those scene files; at most one `node render.mjs beats <id>` check per scene. Then reply with one line."
-                   f"\n{lines}")
+                   f"those scene files; one `node render.mjs beats <id>` check per scene is allowed. Then reply with one "
+                   f"line.\n{lines}")
             w = workers.get(name) or {}
             if not w.get("session_id"):
                 msg = f"Read BRIEF.md and jobs/{name}.json first (your scenes already exist in scenes/).\n" + msg
             try:
                 self.worker("fixes", f"{name} fixes", self.work, msg, self.scene_system(), self.settings["ma_scene_model"],
-                            self.SCENE_TOOLS, self.SCENE_ALLOWED, resume=w.get("session_id"), share=len(by_worker))
+                            self.SCENE_TOOLS, *self.scene_rules(), resume=w.get("session_id"), share=len(by_worker))
             except Exception as e:  # noqa: BLE001
                 errors.append(e)
 
         self.stage("fixes", detail=f"{len(issues)} issue(s) in {len({i['scene'] for i in issues})} scene(s)")
+        self.prepare_work()
+        self.grant_renders(sorted({i["scene"] for i in issues}), 1)
         threads = [threading.Thread(target=one, args=(n, items), daemon=True) for n, items in by_worker.items()]
         for t in threads:
             t.start()
@@ -655,14 +776,18 @@ class Generation:
             e = next((e for e in errors if isinstance(e, kind)), None)
             if e:
                 raise e
+        self.state["qa"]["fixed"] = len(issues)
+        self.finish_fixes(issues, f"{len(issues)} issue(s) sent back")
+
+    def finish_fixes(self, issues: list[dict], detail: str):
+        """After the (single) fix round: publishing check on the scene text, then re-render what changed."""
         flags = self.scene_flags()
         self.state["scene_flags"] = flags
         if flags:
             raise StageError("Scene text still breaks the publishing rules after the fixes:\n"
                              + "\n".join(f"- {k}: {v[0]}" for k, v in flags.items()))
         todo = self.render_changed("fixes")
-        self.state["qa"]["fixed"] = len(issues)
-        self.stage("fixes", detail=f"{len(issues)} issue(s) sent back; {len(todo)} scene(s) re-rendered")
+        self.stage("fixes", detail=f"{detail}; {len(todo)} scene(s) re-rendered" if todo else detail)
 
     def stage_package(self):
         data = self.script()
@@ -681,6 +806,29 @@ class Generation:
             self.state["chapters"] = chapters
         names = {"video": "MP4", "youtube": "YouTube text", "script": "script", "diagram_svg": "diagram"}
         self.stage("package", detail=", ".join(names[k] for k in names if k in outputs))
+
+
+# The work folder's render.mjs: scene workers may only run it, and only within their render rounds.
+SHIM = """// Runs the shared renderer on this folder (see BRIEF.md), within the render rounds each scene is allowed.
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+
+const here = dirname(fileURLToPath(import.meta.url));
+const [mode, id] = process.argv.slice(2);
+if (mode === "beats" || mode === "preview") {
+  const read = (f) => (existsSync(join(here, f)) ? JSON.parse(readFileSync(join(here, f), "utf8")) : {});
+  const limits = read(".render_limits.json"), counts = read(".render_counts.json");
+  if ((counts[id] || 0) >= (limits[id] || 0)) {
+    console.error(`Render limit reached for ${id}: ${limits[id] || 0} round(s) allowed. Finish without rendering it again.`);
+    process.exit(3);
+  }
+  counts[id] = (counts[id] || 0) + 1;
+  writeFileSync(join(here, ".render_counts.json"), JSON.stringify(counts));
+}
+process.env.EXPLAINER_WORK = here;
+await import(RENDERER_URL);
+"""
 
 
 # ------------------------------------------------------------------ module API

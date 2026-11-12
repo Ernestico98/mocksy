@@ -61,7 +61,8 @@ process.exit(failed ? 1 : 0);
 async function explainer() {
   const script = JSON.parse(readFileSync(join(WORK, "script.json"), "utf8"));
   const timings = JSON.parse(readFileSync(join(WORK, "timings.json"), "utf8"));
-  for (const f of ["player.html", "lib.js"]) copyFileSync(join(HERE, f), join(WORK, f));
+  // the backend puts (read-only) copies in the work folder; standalone use gets them here
+  for (const f of ["player.html", "lib.js"]) if (!existsSync(join(WORK, f))) copyFileSync(join(HERE, f), join(WORK, f));
   writeFileSync(join(WORK, "data.js"), `window.SCRIPT=${JSON.stringify(script)};window.TIMINGS=${JSON.stringify(timings)};`);
   const ids = script.scenes.map((s) => s.id);
   const known = (id) => {

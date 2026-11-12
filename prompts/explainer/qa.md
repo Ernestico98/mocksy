@@ -17,7 +17,7 @@ For each frame, check:
    someone missed, a score, feedback, a verdict or hiring, or that speaks to someone about their attempt
    ("you said", "your answer"). A generic teaching "you" is fine.
 
-Write `qa.json` in your working directory (next to `BRIEF.md`, not inside `out/`) with the Write tool:
+Write `out/qa/qa.json` (next to `index.json`) with the Write tool:
 ```json
 {"issues": [{"scene": "s03", "t": 12.4, "severity": "high", "kind": "layout", "issue": "what is wrong", "fix": "the concrete change"}],
  "summary": "one sentence"}
