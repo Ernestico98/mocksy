@@ -102,6 +102,8 @@ class Player {
     audio.onerror = go;           // missing/broken clip: skip, never retry
     if (audio.error) return go(); // it already failed while preloading
     audio.play().catch((e: DOMException) => {
+      // paused (maybe a barge-in) before it started: still this clip's turn, not a broken clip
+      if (e.name === "AbortError" && this.paused && this.audio === audio) return;
       if (e.name !== "NotAllowedError") return go();
       done = true;                // autoplay blocked: wait for a click
       this.current = null;

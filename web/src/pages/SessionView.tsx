@@ -165,12 +165,9 @@ export default function SessionView({ id, meta: app }: { id: string; meta: AppMe
     };
     m.onUtterance = async (wav, { silenceMs }) => {
       const vadAt = performance.now();
-      const clip = player.paused ? player.current : null;
-      if (clip) {   // barge-in: stop talking and tell the interviewer what was heard
-        player.stop();
-        held.current.dropReply(clip.message_id);
-        void api.interrupt(id, clip.message_id, clip.index).catch(() => {});
-      }
+      // speech over the interviewer paused it; it stays paused until we know this is a real turn
+      const barged = player.paused ? player.current : null;
+      const carryOn = () => { player.unpause(); playHeld(); };
       void api.activity(id, false).catch(() => {});
       setTranscribing(true);
       inFlight.current++;
@@ -181,15 +178,23 @@ export default function SessionView({ id, meta: app }: { id: string; meta: AppMe
       try {
         const text = await api.transcribe(id, wav, { vadAt, silenceMs });
         done();
-        if (!text) { setNotice("Didn't catch that — please say it again."); playHeld(); return; }
-        // a real turn: replies that arrived meanwhile went unheard; tell the interviewer before it reads this
-        await Promise.all(held.current.drop(played.current).map((d) =>
-          api.interrupt(id, d.message_id, d.heard_index).catch(() => {})));
+        if (!text) { setNotice("Didn't catch that — please say it again."); carryOn(); return; }
+        // a real turn: stop the reply it talked over, drop replies that arrived meanwhile (unheard),
+        // and tell the interviewer what was heard before it reads this turn
+        const interrupts = held.current.drop(played.current);
+        if (barged && player.current === barged) {
+          player.stop();
+          held.current.dropReply(barged.message_id);
+          if (!interrupts.some((d) => d.message_id === barged.message_id)) {
+            interrupts.push({ message_id: barged.message_id, heard_index: played.current.get(barged.message_id) ?? -1 });
+          }
+        }
+        await Promise.all(interrupts.map((d) => api.interrupt(id, d.message_id, d.heard_index).catch(() => {})));
         await synced;
         await api.say(id, text);
       } catch (e) {
         setNotice("Transcription failed: " + (e as Error).message);
-        playHeld();
+        carryOn();
       } finally {
         done();
         setTranscribing(inFlight.current > 0);

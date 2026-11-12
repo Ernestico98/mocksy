@@ -231,41 +231,78 @@ def test_older_cli_without_effort_is_retried_without_it(monkeypatch, capsys):
     assert not any(k == "exit" and d.get("error") for k, d in events)
 
 
-def test_interviewer_counts_as_alive_while_deciding_to_retry(monkeypatch):
+class Gated(FakeProc):
+    """Exits (or not) as told: `poll` reports `dead_code` until the gate opens; `wait` blocks on it."""
+
+    def __init__(self, args, gate, dead_code=None, **kw):
+        super().__init__(args, **kw)
+        self.gate, self.dead_code = gate, dead_code
+
+    def poll(self):
+        return self.code if self.gate.is_set() else self.dead_code
+
+    def wait(self):
+        self.gate.wait(3)
+        return self.code
+
+
+def wait_until(cond, timeout=3.0):
+    import time
+    end = time.time() + timeout
+    while time.time() < end and not cond():
+        time.sleep(0.01)
+    return cond()
+
+
+def test_interviewer_counts_as_alive_while_a_retry_without_effort_is_pending(monkeypatch):
+    import threading
+
+    from app.interviewer import Interviewer
+    first, second = threading.Event(), threading.Event()
+    made = spawn_with(monkeypatch,
+                      # died over --effort, while its reader is still busy (wait blocks)
+                      lambda a: Gated(a, first, dead_code=1, stderr="error: unknown option '--effort'\n", code=1),
+                      lambda a: Gated(a, second, dead_code=None))  # the respawned one keeps running
+    events = []
+    it = Interviewer("/tmp", "haiku", "P", None, lambda k, d: events.append((k, d)), effort="low")
+    assert wait_until(lambda: it.alive)       # dead, but about to be respawned: don't replace it
+    first.set()
+    assert wait_until(lambda: len(made) == 2)
+    assert it.alive                            # respawned in place: still one interviewer
+    second.set()
+    assert wait_until(lambda: any(k == "exit" for k, _ in events))
+    assert not it.alive
+
+
+@pytest.mark.parametrize("effort,stderr", [(None, "Segmentation fault\n"), ("low", "error: Not logged in\n")])
+def test_crashed_interviewer_is_not_alive_while_its_reader_still_waits(monkeypatch, effort, stderr):
+    import threading
+
+    from app.interviewer import Interviewer
+    gate = threading.Event()
+    spawn_with(monkeypatch, lambda a: Gated(a, gate, dead_code=1, stderr=stderr, code=1))
+    it = Interviewer("/tmp", "sonnet", "P", None, lambda k, d: None, effort=effort)
+    # the session must be able to respawn right away, or the next message hits a broken pipe
+    assert wait_until(lambda: not it.alive)
+    gate.set()
+
+
+def test_reader_crash_does_not_leave_the_interviewer_alive(monkeypatch):
     import threading
     import time
 
     from app.interviewer import Interviewer
-    release, release2 = threading.Event(), threading.Event()
-
-    class SlowDeath(FakeProc):
-        gate = release
-
-        def wait(self):          # the reader is still collecting stderr / deciding
-            self.gate.wait(3)
-            return self.code
-
-    class SlowDeath2(SlowDeath):
-        gate = release2
-
-    made = spawn_with(monkeypatch,
-                      lambda a: SlowDeath(a, stderr="error: unknown option '--effort'\n", code=1),
-                      lambda a: SlowDeath2(a))
-    events = []
-    it = Interviewer("/tmp", "haiku", "P", None, lambda k, d: events.append((k, d)), effort="low")
-    time.sleep(0.05)
-    assert it.alive                    # dead process, but a retry may follow: don't replace it
-    release.set()
-    end = time.time() + 3
-    while time.time() < end and len(made) < 2:
-        time.sleep(0.01)
-    assert len(made) == 2 and it.alive  # respawned in place: still one interviewer
-    release2.set()
-    end = time.time() + 3
-    while time.time() < end and not any(k == "exit" for k, _ in events):
-        time.sleep(0.01)
-    assert not it.alive                # the retry ended too (empty output): now a new one may start
-    it.stop()
+    crashed = threading.Event()
+    monkeypatch.setattr(threading, "excepthook", lambda args: crashed.set())  # expected: keep the log clean
+    gate = threading.Event()
+    gate.set()
+    spawn_with(monkeypatch, lambda a: Gated(a, gate, stdout='{"type": "stream_event"}\n',  # no "event": KeyError
+                                            stderr="error: unknown option '--effort'\n", code=1))
+    it = Interviewer("/tmp", "haiku", "P", None, lambda k, d: None, effort="low")
+    assert wait_until(lambda: it.exited)
+    assert not it.alive
+    assert crashed.wait(2)
+    time.sleep(0.01)
 
 
 def test_stopped_interviewer_is_not_alive(monkeypatch):

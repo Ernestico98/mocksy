@@ -146,7 +146,9 @@ class Interviewer:
 
     effort: str | None = None
     stopped = False
-    exited = False                # the reader saw the process end and decided not to respawn it
+    exited = False                # the reader of the current process has finished
+    stderr_thread: threading.Thread | None = None
+    stderr_tail: list[str] = []
     inflight: str | None = None   # the message being answered, resent if the process is respawned
 
     def __init__(self, cwd, model: str, system_prompt: str, resume: str | None,
@@ -162,7 +164,8 @@ class Interviewer:
         self._spawn()
 
     def _spawn(self):
-        self.stderr_tail: list[str] = []
+        self.exited = False
+        self.stderr_tail = []
         self.proc = subprocess.Popen(
             claude_args(self.model, self.system_prompt, self.session_id, self.effort), cwd=self.cwd,
             stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
@@ -191,14 +194,29 @@ class Interviewer:
             self.proc.stdin.write(json.dumps(msg) + "\n")
             self.proc.stdin.flush()
         except (BrokenPipeError, OSError) as e:
+            if self._retry_pending():
+                return  # the reader respawns without --effort and sends `inflight` again
             self.busy = False
             self.on_event("error", {"value": f"interviewer process is not running ({e})"})
 
+    def _effort_unsupported(self) -> bool:
+        """The process exited complaining about --effort (an older Claude Code)."""
+        if not self.effort:
+            return False
+        if self.stderr_thread:
+            self.stderr_thread.join(2)  # the process is gone: its stderr ends right away
+        return "effort" in "\n".join(self.stderr_tail).lower()
+
+    def _retry_pending(self) -> bool:
+        return not self.stopped and not self.exited and self.proc.poll() is not None and self._effort_unsupported()
+
     @property
     def alive(self) -> bool:
-        # Until the reader has decided (it may respawn without --effort), a dead process still counts
-        # as alive, so the session doesn't start a second interviewer meanwhile.
-        return not self.stopped and not self.exited
+        """A running process, or one that just died over --effort and is about to be respawned
+        without it (so the session doesn't start a second interviewer meanwhile)."""
+        if self.stopped:
+            return False
+        return self.proc.poll() is None or self._retry_pending()
 
     def stop(self):
         self.stopped = True
@@ -208,6 +226,13 @@ class Interviewer:
     # ---------------------------------------------------------- output
     def _read(self, proc=None):
         proc = proc or self.proc
+        try:
+            self._read_events(proc)
+        finally:
+            if proc is self.proc:   # not respawned: nothing more will come from this interviewer
+                self.exited = True
+
+    def _read_events(self, proc):
         for line in proc.stdout:
             try:
                 ev = json.loads(line)
@@ -241,11 +266,11 @@ class Interviewer:
                         text, self.queue = "\n\n".join(self.queue), []
                         self._write(text)
         code = proc.wait()
-        if getattr(self, "stderr_thread", None):
+        if self.stderr_thread:
             self.stderr_thread.join(2)
-        error = "\n".join(getattr(self, "stderr_tail", [])).strip()
+        error = "\n".join(self.stderr_tail).strip()
         if code and not self.stopped:
-            if self.effort and "effort" in error.lower():
+            if self._effort_unsupported():
                 # an older Claude Code without --effort: run without it rather than not at all
                 print(f"[claude] warning: this Claude Code doesn't support --effort ({error}); running without it")
                 self.effort = None
