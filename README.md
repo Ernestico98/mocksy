@@ -172,13 +172,27 @@ If the interviewer says "Not logged in", run the login command above.
 `config.toml` holds the defaults; changes made from the app's settings are saved to
 `data/settings.json` and take precedence. The interviewer runs on `sonnet` by default (fast enough
 for conversation) and the evaluation on `opus`; both can be changed per session. The evaluation
-language, voices and the Whisper models are set there too.
+language, voices and the Whisper models are set there too. `effort` (also under **Models** on the
+home screen) is the interviewer's reasoning effort: `default` leaves it to Claude Code, `low`
+answers sooner (with `haiku` it skips thinking).
+
+In a session, the ⚙ menu sets the voice, its speed and the **pause that ends your turn**. The
+default, *Adaptive*, waits 0.8 s after a long answer that trails off like a finished sentence,
+1.8 s after a short, abrupt start, and 1.3 s otherwise; fixed pauses are there if it cuts you off.
+**Show response times** (or opening the app with `?debug=1`) shows how long the last reply took,
+from the end of your speech to the interviewer's first audio, stage by stage.
 
 ## Development
 
 ```sh
-scripts/test.sh    # pytest + typecheck + vitest
+scripts/test.sh                          # pytest + typecheck + vitest
+.venv/bin/python scripts/bench_latency.py  # response-time benchmark, no microphone needed
 ```
+
+The benchmark synthesises a few candidate answers with Kokoro, runs them through Whisper, a real
+interviewer (`haiku` by default; `--model`, `--effort`, `--turns`, `--lang`) and the TTS worker, and
+prints each stage up to "first audio ready", plus prompt-cache usage. Every live turn is also
+logged by the server as a `[latency]` JSON line and stored on the candidate's message (`latency`).
 
 **Stack:** FastAPI and Python 3.11 · React 19, Vite and TypeScript · Excalidraw ·
 Whisper (mlx-whisper / faster-whisper) · Kokoro (ONNX) · Claude Code CLI.

@@ -12,6 +12,9 @@ are spoken with local Kokoro TTS. At the end a second Claude call writes the eva
   - `speech.py` Kokoro TTS / Whisper STT with hallucination filters; STT engine is mlx-whisper on Apple Silicon,
     faster-whisper elsewhere (`stt_engine` in `config.toml`; per-platform markers in `requirements.txt`)
   - `config.py` `config.toml` defaults + `data/settings.json` overrides
+  - `latency.py` per-turn timing (VAD → upload → STT → sent → first text → first chunk → TTS → playback),
+    stored as `latency` on the candidate message and logged as `[latency] {json}`; the browser sends
+    `vad_at`/`silence_ms` with `/transcribe` and reports playback via `/played`
   - `packs.py` interview packs: load, parse/serialize, validate, personal-pack CRUD
 - `prompts/interviewer.md`, `prompts/feedback.md` system prompts (`{placeholders}` filled from session meta)
 - `prompts/packs/*.md` interview types: TOML header between `+++` (title, phases, rubric) + interviewer brief;
@@ -34,11 +37,17 @@ are spoken with local Kokoro TTS. At the end a second Claude call writes the eva
 - Tests: `scripts/test.sh` (pytest + `pnpm typecheck` + vitest). Backend tests use a fake interviewer
   (`tests/conftest.py`) and an isolated `MOCKSY_DATA_DIR`; `MOCKSY_LIVE=1` adds one real Claude Code
   round trip with haiku (`tests/test_live.py`) — run it after touching `app/interviewer.py`
-- Frontend tests live next to the code (`web/src/lib/*.test.ts`): whiteboard description, VAD with synthetic audio
+- Frontend tests live next to the code (`web/src/lib/*.test.ts`): whiteboard description, VAD (incl. the
+  adaptive end-of-turn pause) with synthetic audio
+- Latency: `.venv/bin/python scripts/bench_latency.py` (real Whisper + Claude haiku + Kokoro, no mic, a throwaway
+  data dir); in the UI, ⚙ → "Show response times" or `?debug=1`. The server warms up Kokoro + Whisper at
+  startup (`MOCKSY_WARMUP=0` disables it; tests do)
 - The built-in browser pane has no microphone: test voice in Chrome/Safari
 
 ## Interviewer protocol (see prompts/interviewer.md)
 - Plain text is spoken; tags are actions: `<note>`, `<phase>key</phase>`, `<silent/>`, `<end/>`
+- Replies are spoken chunk by chunk (`TagStream`): the first chunk may end at a clause (≥ 6 words before a
+  comma/colon/dash), later ones at sentence ends; no cuts after abbreviations or inside `¿…?`/`¡…!`
 - Messages to the model carry headers: `[candidate · clock]`, `[canvas]` diffs, `[drawing silently]`,
   `[interrupted]`, `[phase]`, `[system] start`
 - The process runs in the session folder with `--setting-sources "" --strict-mcp-config` and only
