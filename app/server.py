@@ -16,7 +16,7 @@ from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import packs, speech
+from . import model_answer, packs, speech
 from .interviewer import EFFORTS
 from .config import LANGUAGES, ROOT, SESSIONS, load_settings, save_settings
 from .sessions import Session, create_session
@@ -86,6 +86,14 @@ class SettingsIn(BaseModel):
     speed: float | None = None
     voice_en: str | None = None
     voice_es: str | None = None
+    ma_script_model: str | None = None
+    ma_scene_model: str | None = None
+    ma_qa_model: str | None = None
+    ma_budget_usd: float | None = None
+    ma_scenes: int | None = None
+    ma_fix_rounds: int | None = None
+    ma_name_company: bool | None = None
+    ma_chrome: str | None = None
 
 
 @app.post("/api/settings")
@@ -209,6 +217,8 @@ class NewSession(BaseModel):
 @app.post("/api/sessions")
 def new_session(body: NewSession):
     find_pack(body.pack)
+    if model_answer.current():
+        raise HTTPException(409, "A model answer is being generated (it needs the CPU): wait for it or cancel it first.")
     for s in sessions.values():  # one live interview at a time
         if s.meta.get("status") == "live" and s.interviewer:
             s.interviewer.stop()
@@ -342,6 +352,49 @@ async def end(sid: str):
     if s.meta.get("status") == "ended":  # evaluation failed earlier: retry
         s.meta["status"] = "live"
     asyncio.get_running_loop().run_in_executor(None, s.finish)
+    return {"ok": True}
+
+
+# ------------------------------------------------------------------ model answer
+
+class ModelAnswerIn(BaseModel):
+    mode: str = "video"     # "video" or "diagram" (diagram + write-up only)
+    fresh: bool = False     # start over instead of continuing from the last stage that stopped
+
+
+def live_interview() -> bool:
+    return any(s.meta.get("status") == "live" for s in sessions.values())
+
+
+@app.get("/api/sessions/{sid}/model-answer")
+def model_answer_status(sid: str):
+    return model_answer.status(get(sid).dir)
+
+
+@app.post("/api/sessions/{sid}/model-answer")
+def model_answer_start(sid: str, body: ModelAnswerIn):
+    s = get(sid)
+    if body.mode not in model_answer.STAGES:
+        raise HTTPException(422, f"mode must be one of {', '.join(model_answer.STAGES)}")
+    if not (s.dir / "feedback.json").exists():
+        raise HTTPException(409, "Evaluate the interview first: the model answer builds on its evaluation.")
+    if live_interview():
+        raise HTTPException(409, "An interview is in progress: finish it first (speech needs the CPU).")
+    try:
+        return model_answer.start(s.dir, s.meta, broadcast, body.mode, body.fresh)
+    except (model_answer.Busy, model_answer.StageError) as e:
+        raise HTTPException(409, str(e)) from None
+
+
+@app.delete("/api/sessions/{sid}/model-answer")
+def model_answer_cancel(sid: str):
+    """Cancels a running generation; otherwise deletes the generated files."""
+    s = get(sid)
+    if not model_answer.cancel(s.id):
+        try:
+            model_answer.delete(s.dir)
+        except model_answer.Busy as e:
+            raise HTTPException(409, str(e)) from None
     return {"ok": True}
 
 
