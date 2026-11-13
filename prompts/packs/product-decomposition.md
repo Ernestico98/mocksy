@@ -3,6 +3,7 @@ title = "Product Decomposition (generic)"
 description = "Open-ended product problem → wireframe → system design, for product-minded full-stack roles. Tailored to the company you enter."
 company = ""
 default_language = "en"
+model_answer = true
 phases = [
   { key = "problem", label = "Problem", minutes = 15 },
   { key = "wireframe", label = "Wireframe", minutes = 15 },

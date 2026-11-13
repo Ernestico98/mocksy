@@ -7,6 +7,9 @@
 model = "sonnet"          # runs the live conversation (fast + cheaper)
 feedback_model = "opus"   # writes the final evaluation (slower, deeper)
 feedback_language = "en"  # the evaluation is written in this language, whatever the interview language
+# Interviewer reasoning effort (Claude Code --effort): "default" keeps the CLI's own choice;
+# "low" answers sooner (with haiku it skips thinking: ~1 s less before it starts talking).
+effort = "default"
 
 [speech]
 # Speech-to-text engine: "auto" uses mlx on Apple Silicon and faster-whisper elsewhere
@@ -25,3 +28,15 @@ es = "em_alex"
 host = "127.0.0.1"
 port = 8765
 data_dir = "data"
+
+[model_answer]
+# "Model answer": a narrated explainer video (or a diagram + write-up) of how to solve a session's
+# problem, generated after the evaluation. Every stage is a fresh, bounded Claude Code process.
+script_model = "opus"     # writes the script and the diagram (the only judgment step)
+scene_model = "sonnet"    # two workers animate the scenes
+qa_model = "sonnet"       # one review pass over end-of-beat frames
+budget_usd = 10.0         # hard cap per generation (API-equivalent USD as Claude Code reports it)
+scenes = 8                # target scene count (7-8 scenes, ~750 words, 5-6 minutes)
+fix_rounds = 1            # 0 or 1: one round of fixes after QA
+name_company = false      # allow the target company's name in the published video
+chrome = "auto"           # path to Chrome/Chromium, or "auto"

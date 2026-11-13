@@ -6,6 +6,7 @@ import tempfile
 
 # Must happen before any `app.*` import: config resolves the data dir at import time.
 os.environ["MOCKSY_DATA_DIR"] = tempfile.mkdtemp(prefix="mocksy-test-")
+os.environ["MOCKSY_WARMUP"] = "0"  # don't load the speech models at app startup
 
 import numpy as np  # noqa: E402
 import pytest  # noqa: E402
@@ -18,8 +19,9 @@ class FakeInterviewer:
 
     instances: list["FakeInterviewer"] = []
 
-    def __init__(self, cwd, model, system_prompt, resume, on_event):
+    def __init__(self, cwd, model, system_prompt, resume, on_event, effort=None):
         self.cwd, self.model, self.system_prompt, self.resume = cwd, model, system_prompt, resume
+        self.effort = effort
         self.on_event = on_event
         self.sent: list[str] = []
         self.busy = False
@@ -39,6 +41,8 @@ class FakeInterviewer:
     # helper: replay what the real parser would emit for one assistant turn
     def reply(self, *events):
         self.on_event("turn_start", {})
+        if events:
+            self.on_event("first_text", {})
         for kind, value in events:
             self.on_event(kind, {"value": value})
         self.on_event("turn_end", {"value": 0.001})

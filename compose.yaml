@@ -1,6 +1,9 @@
 services:
   mocksy:
-    build: .
+    build:
+      context: .
+      args:
+        WITH_EXPLAINER: ${WITH_EXPLAINER:-0}   # 1: also render "Model answer" videos (+~400 MB)
     image: mocksy
     ports:
       - "127.0.0.1:8765:8765"   # localhost only: browsers allow the microphone there without HTTPS

@@ -89,6 +89,13 @@ def test_dead_process_is_resumed_on_next_message(session):
     assert "hello again" in new.sent[-1]
 
 
+def test_process_exit_shows_the_cli_error(session, events):
+    interviewer(session).on_event("exit", {"value": 1, "error": "Claude Code: error: unknown option '--x'"})
+    status = [e for e in events if e.get("type") == "status"][-1]
+    assert status["state"] == "error" and "unknown option '--x'" in status["detail"]
+    assert "will resume with your next message" in status["detail"]
+
+
 # ---------------------------------------------------------------- candidate turns
 
 def test_say_sends_header_with_clock(session):
@@ -163,6 +170,16 @@ def test_interrupt_records_what_was_heard_and_cancels_tts(session):
     session.say("Sorry, quick question")
     sent = it.sent[-1]
     assert '[interrupted]' in sent and 'They heard: "First sentence here, quite long."' in sent
+
+
+def test_reply_that_arrives_while_the_candidate_still_talks_is_dropped(session):
+    it = interviewer(session)
+    it.reply(("speech", "An answer to half a thought, nobody heard."))
+    msg = next(m for m in session.messages if m["role"] == "interviewer")
+    session.interrupt(msg["id"], heard_index=-1)
+    assert msg["interrupted"] and msg["heard"] == ""
+    session.say("...and the second half of my thought.")
+    assert "didn't hear any of it" in it.sent[-1] and 'They heard: ""' not in it.sent[-1]
 
 
 def test_speech_after_interrupt_is_not_spoken(session):
@@ -318,3 +335,58 @@ def test_session_reloads_from_disk(session, events):
     again = sessions.Session(session.dir, events.append)
     assert again.messages[-1]["text"] == "persist me"
     assert again.next_id == session.next_id
+
+
+# ---------------------------------------------------------------- packs without a whiteboard
+
+@pytest.fixture
+def talk_pack(monkeypatch, tmp_path):
+    from app import config, packs
+    monkeypatch.setattr(config, "DATA", tmp_path)
+    pack = {"id": "talk-only", "title": "Talk only", "whiteboard": False, "default_language": "en",
+            "phases": [{"key": "talk", "label": "Talk", "minutes": 10}], "rubric": ["Clarity"],
+            "body": "Original brief."}
+    packs.save_pack(pack)
+    return pack
+
+
+def test_session_without_whiteboard_ignores_the_canvas(talk_pack, events, monkeypatch):
+    s = sessions.create_session("talk-only", "", "Mid", "", "en", "haiku", "haiku", events.append)
+    s.start()
+    it = interviewer(s)
+    assert s.meta["whiteboard"] is False and s.meta["pack_body"] == "Original brief."
+    assert "[canvas]" not in it.system_prompt and "whiteboard" not in it.system_prompt.lower()
+
+    s.update_canvas(['box "API"'], "data:image/png;base64,iVBORw0KGgo=", "{}")
+    assert not (s.dir / "canvas.png").exists() and s.canvas_lines == []
+    s.say("Hello there.")
+    assert "[canvas]" not in it.sent[-1]
+    s.canvas_lines = ['box "API"']  # even with stale state, never a silent-drawing prompt
+    assert not s.maybe_prompt_silent_drawing(time.time() + 1000)
+    s.ask_to_look("What do you think?")
+    assert it.sent[-1].startswith("[candidate typed") and "canvas.png" not in it.sent[-1]
+
+    (s.dir / "canvas.png").write_bytes(b"png")
+    calls = {}
+
+    def fake_run(args, **kw):
+        calls["request"], calls["prompt"] = args[args.index("-p") + 1], args[args.index("--system-prompt") + 1]
+        return types.SimpleNamespace(returncode=0, stdout=json.dumps({"result": "ok"}), stderr="")
+    monkeypatch.setattr(sessions.subprocess, "run", fake_run)
+    sessions.evaluate(s)
+    assert "canvas.png" not in calls["request"] and "sketches" not in calls["prompt"]
+
+
+def test_editing_a_pack_doesnt_change_a_running_session(talk_pack, events):
+    from app import packs
+    s = sessions.create_session("talk-only", "", "Mid", "", "en", "haiku", "haiku", events.append)
+    s.start()
+    packs.save_pack(talk_pack | {"body": "Edited brief.", "whiteboard": True,
+                                 "phases": [{"key": "other", "label": "Other", "minutes": 5}]}, old_id="talk-only")
+    s.interviewer = None
+    s.ensure_interviewer()  # e.g. the process restarted mid-interview
+    prompt = interviewer(s).system_prompt
+    assert "Original brief." in prompt and "Edited brief." not in prompt and "[canvas]" not in prompt
+    assert s.meta["phases"][0]["key"] == "talk"
+    packs.delete_pack("talk-only")
+    assert "Original brief." in s.system_prompt()

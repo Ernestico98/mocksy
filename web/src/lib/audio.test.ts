@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { Mic } from "./audio";
+import { ADAPTIVE_FAST_END, Mic } from "./audio";
 
 // Drive the voice-activity detector with synthetic audio, no browser needed.
 const RATE = 16000;
@@ -17,6 +17,13 @@ function tone(amplitude: number) {
 function feed(mic: Mic, amplitude: number, ms: number) {
   const m = mic as unknown as Internals;
   for (let t = 0; t < ms; t += frameMs) m.frame(tone(amplitude));
+}
+
+// speech whose loudness glides from one amplitude to another (a sentence fading out)
+function ramp(mic: Mic, from: number, to: number, ms: number) {
+  const m = mic as unknown as Internals;
+  const n = Math.round(ms / frameMs);
+  for (let i = 0; i < n; i++) m.frame(tone(from + ((to - from) * i) / Math.max(1, n - 1)));
 }
 
 function makeMic(opts: Partial<Mic> = {}) {
@@ -103,5 +110,171 @@ describe("Mic voice activity detection", () => {
     expect(onUtterance).not.toHaveBeenCalled();
     mic.stopTalking();
     expect(onUtterance).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("Adaptive end of turn", () => {
+  it("never ends a turn sooner than 1.3 s by default, even after a finished-sounding answer", () => {
+    const { mic, onUtterance } = makeMic();
+    feed(mic, LOUD, 3200);
+    ramp(mic, LOUD, 0.02, 160);  // the last word trails off
+    feed(mic, SILENT, 1250);
+    expect(onUtterance).not.toHaveBeenCalled();
+    feed(mic, SILENT, 150);
+    expect(onUtterance).toHaveBeenCalledTimes(1);
+  });
+
+  it("the faster profile ends a long answer that fades out after 1 s", () => {
+    const { mic, onUtterance } = makeMic({ endOfTurn: ADAPTIVE_FAST_END });
+    feed(mic, LOUD, 3200);
+    ramp(mic, LOUD, 0.02, 160);
+    feed(mic, SILENT, 900);
+    expect(onUtterance).not.toHaveBeenCalled();
+    feed(mic, SILENT, 150);
+    expect(onUtterance).toHaveBeenCalledTimes(1);
+    const silenceMs = onUtterance.mock.calls[0][1].silenceMs;
+    expect(silenceMs).toBeGreaterThanOrEqual(1000);
+    expect(silenceMs).toBeLessThan(1100);
+  });
+
+  // the two thinking pauses that a 1 s threshold cuts: safe by default, cut only when opted in
+  const scenarios: [string, (mic: Mic) => void, number][] = [
+    ["3.2 s fading answer, 1.15 s thinking pause", (mic) => {
+      feed(mic, LOUD, 3200);
+      ramp(mic, LOUD, 0.02, 160);
+    }, 1150],
+    ["1.5 s, a 0.5 s gap, a 2.2 s fading stretch, 1.1 s thinking pause", (mic) => {
+      feed(mic, LOUD, 1500);
+      feed(mic, SILENT, 500);
+      feed(mic, LOUD, 2200);
+      ramp(mic, LOUD, 0.02, 160);
+    }, 1100],
+  ];
+
+  it.each(scenarios)("default keeps listening: %s", (_name, speak, pause) => {
+    const { mic, onUtterance } = makeMic();
+    speak(mic);
+    feed(mic, SILENT, pause);
+    feed(mic, LOUD, 800);        // the candidate goes on
+    expect(onUtterance).not.toHaveBeenCalled();
+  });
+
+  it.each(scenarios)("the faster profile ends the turn: %s", (_name, speak, pause) => {
+    const { mic, onUtterance } = makeMic({ endOfTurn: ADAPTIVE_FAST_END });
+    speak(mic);
+    feed(mic, SILENT, pause);
+    expect(onUtterance).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([800, 1000, 1200])("does not cut a %i ms mid-thought pause after a phrase that stops abruptly", (pause) => {
+    const { mic, onUtterance } = makeMic();
+    feed(mic, LOUD, 3500);
+    feed(mic, SILENT, pause);    // "...I'd put the events on a" (thinks) "queue"
+    feed(mic, LOUD, 800);
+    expect(onUtterance).not.toHaveBeenCalled();
+  });
+
+  it.each([800, 1000, 1200, 1300])("does not cut a %i ms pause after a short hesitant fragment", (pause) => {
+    const { mic, onUtterance } = makeMic();
+    feed(mic, LOUD, 3200);
+    ramp(mic, LOUD, 0.02, 160);  // a finished sentence...
+    feed(mic, SILENT, 500);      // a breath...
+    feed(mic, LOUD, 400);        // "so I'd..."
+    ramp(mic, LOUD, 0.02, 160);  // trailing off while thinking
+    feed(mic, SILENT, pause);
+    expect(onUtterance).not.toHaveBeenCalled();
+    feed(mic, LOUD, 1000);       // "...put a queue in front of it"
+    expect(onUtterance).not.toHaveBeenCalled();
+  });
+
+  it("the hesitant fragment still ends the turn after the long pause", () => {
+    const { mic, onUtterance } = makeMic();
+    feed(mic, LOUD, 3200);
+    feed(mic, SILENT, 500);
+    feed(mic, LOUD, 400);
+    feed(mic, SILENT, 1700);
+    expect(onUtterance).not.toHaveBeenCalled();
+    feed(mic, SILENT, 200);
+    expect(onUtterance).toHaveBeenCalledTimes(1);
+  });
+
+  it("a fade after a short last stretch waits the normal pause", () => {
+    const { mic, onUtterance } = makeMic();
+    feed(mic, LOUD, 2500);
+    feed(mic, SILENT, 500);
+    feed(mic, LOUD, 1200);       // only 1.2 s since the last pause
+    ramp(mic, LOUD, 0.02, 160);
+    feed(mic, SILENT, 1200);
+    expect(onUtterance).not.toHaveBeenCalled();
+    feed(mic, SILENT, 200);
+    expect(onUtterance).toHaveBeenCalledTimes(1);
+  });
+
+  it("waits the normal pause when a long answer stops abruptly", () => {
+    const { mic, onUtterance } = makeMic();
+    feed(mic, LOUD, 3500);
+    feed(mic, SILENT, 1250);
+    expect(onUtterance).not.toHaveBeenCalled();
+    feed(mic, SILENT, 150);
+    expect(onUtterance).toHaveBeenCalledTimes(1);
+  });
+
+  it("gives a short, abrupt start more time", () => {
+    const { mic, onUtterance } = makeMic();
+    feed(mic, LOUD, 600);        // "So I think..."
+    feed(mic, SILENT, 1700);
+    expect(onUtterance).not.toHaveBeenCalled();
+    feed(mic, SILENT, 200);
+    expect(onUtterance).toHaveBeenCalledTimes(1);
+  });
+
+  it("a short answer that fades out waits the normal pause", () => {
+    const { mic, onUtterance } = makeMic();
+    feed(mic, LOUD, 700);
+    ramp(mic, LOUD, 0.02, 160);  // "Yes, exactly."
+    feed(mic, SILENT, 1250);
+    expect(onUtterance).not.toHaveBeenCalled();
+    feed(mic, SILENT, 150);
+    expect(onUtterance).toHaveBeenCalledTimes(1);
+  });
+
+  it("a fixed pause setting turns adaptivity off", () => {
+    const { mic, onUtterance } = makeMic({ endSilenceMs: 1300 });
+    feed(mic, LOUD, 3200);
+    ramp(mic, LOUD, 0.02, 160);
+    feed(mic, SILENT, 1250);
+    expect(onUtterance).not.toHaveBeenCalled();
+    feed(mic, SILENT, 150);
+    expect(onUtterance).toHaveBeenCalledTimes(1);
+  });
+
+  it("speech under steady background noise is not mistaken for fading out", () => {
+    const { mic, onUtterance } = makeMic();
+    feed(mic, 0.01, 2000);       // room noise: the detector adapts to it
+    feed(mic, LOUD, 3500);
+    feed(mic, 0.01, 1250);       // back to the noise floor, abruptly
+    expect(onUtterance).not.toHaveBeenCalled();
+    feed(mic, 0.01, 150);
+    expect(onUtterance).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("Discarded speech", () => {
+  it("reports a blip that was too short to be a turn", () => {
+    const onDiscard = vi.fn();
+    const { mic, onUtterance, onSpeechStart } = makeMic({ onDiscard });
+    feed(mic, LOUD, 200);        // a cough: enough to start "speaking"...
+    expect(onSpeechStart).toHaveBeenCalledTimes(1);
+    feed(mic, SILENT, 2000);     // ...but not a turn
+    expect(onUtterance).not.toHaveBeenCalled();
+    expect(onDiscard).toHaveBeenCalledTimes(1);
+  });
+
+  it("reports a recording dropped by muting", () => {
+    const onDiscard = vi.fn();
+    const { mic } = makeMic({ onDiscard });
+    feed(mic, LOUD, 500);
+    mic.setMuted(true);
+    expect(onDiscard).toHaveBeenCalledTimes(1);
   });
 });

@@ -13,9 +13,20 @@ from typing import Callable
 
 TOOLS = ["Read", "Write", "Edit", "WebSearch", "WebFetch"]
 SENTENCE_END = re.compile(r"[.!?…:;](?=\s)|\n")
+CLAUSE_END = re.compile(r"[,;:—–](?=\s)")
+MIN_SENTENCE_CHARS = 25   # shorter sentences ("Okay.") stay with the next one, so audio isn't choppy
+MIN_CLAUSE_WORDS = 6      # the first chunk of a reply may end at a comma once it has this many words
+# A period after these is not the end of a sentence ("e.g. caching", "Dr. Smith", "p. ej.")
+ABBREVIATIONS = {
+    "e.g.", "i.e.", "vs.", "dr.", "mr.", "mrs.", "ms.", "prof.", "st.", "approx.", "fig.",
+    "sr.", "sra.", "srta.", "dra.", "ej.", "p.", "pág.", "aprox.", "núm.", "ud.", "uds.",
+}
 
 
-def claude_args(model: str, system_prompt: str, resume: str | None = None) -> list[str]:
+EFFORTS = ["default", "low", "medium", "high"]
+
+
+def claude_args(model: str, system_prompt: str, resume: str | None = None, effort: str | None = None) -> list[str]:
     args = [
         "claude", "-p",
         "--input-format", "stream-json",
@@ -28,6 +39,8 @@ def claude_args(model: str, system_prompt: str, resume: str | None = None) -> li
         "--setting-sources", "",
         "--strict-mcp-config",
     ]
+    if effort in EFFORTS[1:]:
+        args += ["--effort", effort]
     if resume:
         args += ["--resume", resume]
     return args
@@ -43,6 +56,7 @@ class TagStream:
         self.emit = emit
         self.buf = ""       # raw text not yet classified
         self.speech = ""    # speech text waiting for a sentence boundary
+        self.spoken = False  # a chunk was emitted already (the first one may be a clause)
 
     def feed(self, text: str):
         self.buf += text
@@ -76,19 +90,48 @@ class TagStream:
     def _speech(self, text: str):
         self.speech += text
         while True:
-            # cut at the first sentence end, but keep very short fragments
-            # ("Okay.") together with the next sentence so audio isn't choppy
-            cut = next((m.end() for m in SENTENCE_END.finditer(self.speech)
-                        if m.end() >= 25 or m.group() == "\n"), None)
+            cut = self._cut()
             if cut is None:
                 break
             chunk, self.speech = self.speech[:cut], self.speech[cut:]
-            if chunk.strip():
-                self.emit("speech", chunk.strip())
+            self._emit_speech(chunk)
+
+    def _cut(self) -> int | None:
+        """Where the next speakable chunk ends: the first full sentence, or for the first chunk
+        of a reply, an earlier clause (comma, colon...) so synthesis can start sooner."""
+        s = self.speech
+        ends = [m for m in SENTENCE_END.finditer(s) if m.group() == "\n" or self._sentence_end(s, m)]
+        if not self.spoken:
+            ends += [m for m in CLAUSE_END.finditer(s) if self._clause_end(s, m)]
+            ends.sort(key=lambda m: m.end())
+        return next((m.end() for m in ends), None)
+
+    @staticmethod
+    def _sentence_end(s: str, m: re.Match) -> bool:
+        if m.end() < MIN_SENTENCE_CHARS:
+            return False
+        if m.group() == ".":
+            word = s[:m.end()].rsplit(None, 1)[-1].lstrip("¿¡(\"'").lower()
+            if word in ABBREVIATIONS or re.fullmatch(r"(?:[a-z]\.)+", word):  # "e.g.", "U.S.", "J."
+                return False
+        return True
+
+    @staticmethod
+    def _clause_end(s: str, m: re.Match) -> bool:
+        head = s[:m.end()]
+        if len(head.split()) < MIN_CLAUSE_WORDS:
+            return False
+        # never inside an open Spanish question/exclamation or a parenthesis: it would change the intonation
+        return (head.count("¿") <= head.count("?") and head.count("¡") <= head.count("!")
+                and head.count("(") <= head.count(")"))
+
+    def _emit_speech(self, chunk: str):
+        if chunk.strip():
+            self.spoken = True
+            self.emit("speech", chunk.strip())
 
     def _flush_speech(self):
-        if self.speech.strip():
-            self.emit("speech", self.speech.strip())
+        self._emit_speech(self.speech)
         self.speech = ""
 
     def close(self):
@@ -101,21 +144,36 @@ class TagStream:
 class Interviewer:
     """One Claude Code process per live session. Thread-safe `send`."""
 
+    effort: str | None = None
+    stopped = False
+    exited = False                # the reader of the current process has finished
+    stderr_thread: threading.Thread | None = None
+    stderr_tail: list[str] = []
+    inflight: str | None = None   # the message being answered, resent if the process is respawned
+
     def __init__(self, cwd, model: str, system_prompt: str, resume: str | None,
-                 on_event: Callable[[str, dict], None]):
+                 on_event: Callable[[str, dict], None], effort: str | None = None):
         self.on_event = on_event
         self.lock = threading.Lock()
         self.busy = False
         self.queue: list[str] = []
         self.session_id = resume
+        self.cwd, self.model, self.system_prompt, self.effort = cwd, model, system_prompt, effort
+        self.parser: TagStream | None = None
+        self.got_text = False
+        self._spawn()
+
+    def _spawn(self):
+        self.exited = False
+        self.stderr_tail = []
         self.proc = subprocess.Popen(
-            claude_args(model, system_prompt, resume), cwd=cwd,
+            claude_args(self.model, self.system_prompt, self.session_id, self.effort), cwd=self.cwd,
             stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
             text=True, bufsize=1,
         )
-        self.parser: TagStream | None = None
-        threading.Thread(target=self._read, daemon=True).start()
-        threading.Thread(target=self._drain_stderr, daemon=True).start()
+        self.stderr_thread = threading.Thread(target=self._drain_stderr, args=(self.proc,), daemon=True)
+        self.stderr_thread.start()
+        threading.Thread(target=self._read, args=(self.proc,), daemon=True).start()
 
     # ---------------------------------------------------------- input
     def send(self, text: str):
@@ -127,6 +185,8 @@ class Interviewer:
 
     def _write(self, text: str):
         self.busy = True
+        self.inflight = text
+        self.got_text = False
         self.parser = TagStream(lambda kind, val: self.on_event(kind, {"value": val}))
         self.on_event("turn_start", {})
         msg = {"type": "user", "message": {"role": "user", "content": [{"type": "text", "text": text}]}}
@@ -134,20 +194,46 @@ class Interviewer:
             self.proc.stdin.write(json.dumps(msg) + "\n")
             self.proc.stdin.flush()
         except (BrokenPipeError, OSError) as e:
+            if self._retry_pending():
+                return  # the reader respawns without --effort and sends `inflight` again
             self.busy = False
             self.on_event("error", {"value": f"interviewer process is not running ({e})"})
 
+    def _effort_unsupported(self) -> bool:
+        """The process exited complaining about --effort (an older Claude Code)."""
+        if not self.effort:
+            return False
+        if self.stderr_thread:
+            self.stderr_thread.join(2)  # the process is gone: its stderr ends right away
+        return "effort" in "\n".join(self.stderr_tail).lower()
+
+    def _retry_pending(self) -> bool:
+        return not self.stopped and not self.exited and self.proc.poll() is not None and self._effort_unsupported()
+
     @property
     def alive(self) -> bool:
-        return self.proc.poll() is None
+        """A running process, or one that just died over --effort and is about to be respawned
+        without it (so the session doesn't start a second interviewer meanwhile)."""
+        if self.stopped:
+            return False
+        return self.proc.poll() is None or self._retry_pending()
 
     def stop(self):
-        if self.alive:
+        self.stopped = True
+        if self.proc.poll() is None:
             self.proc.terminate()
 
     # ---------------------------------------------------------- output
-    def _read(self):
-        for line in self.proc.stdout:
+    def _read(self, proc=None):
+        proc = proc or self.proc
+        try:
+            self._read_events(proc)
+        finally:
+            if proc is self.proc:   # not respawned: nothing more will come from this interviewer
+                self.exited = True
+
+    def _read_events(self, proc):
+        for line in proc.stdout:
             try:
                 ev = json.loads(line)
             except ValueError:
@@ -159,24 +245,47 @@ class Interviewer:
             elif t == "stream_event":
                 e = ev["event"]
                 if e.get("type") == "content_block_delta" and e["delta"].get("type") == "text_delta":
+                    if not self.got_text:
+                        self.got_text = True
+                        self.on_event("first_text", {})
                     self.parser.feed(e["delta"]["text"])
                 elif e.get("type") == "content_block_start" and e["content_block"].get("type") in ("tool_use", "server_tool_use"):
                     self.on_event("tool", {"value": e["content_block"].get("name")})
                 elif e.get("type") == "message_stop":
                     self.parser.close()  # a tool call may follow; speech so far is complete
             elif t == "result":
-                self.parser.close()
+                if self.parser:
+                    self.parser.close()
                 self.on_event("turn_end", {"value": ev.get("total_cost_usd")})
                 if ev.get("is_error"):  # e.g. "Not logged in · Please run /login"
                     self.on_event("error", {"value": f"Claude Code: {ev.get('result') or 'request failed'}"})
                 with self.lock:
                     self.busy = False
+                    self.inflight = None
                     if self.queue:
                         text, self.queue = "\n\n".join(self.queue), []
                         self._write(text)
-        self.on_event("exit", {"value": self.proc.returncode})
+        code = proc.wait()
+        if self.stderr_thread:
+            self.stderr_thread.join(2)
+        error = "\n".join(self.stderr_tail).strip()
+        if code and not self.stopped:
+            if self._effort_unsupported():
+                # an older Claude Code without --effort: run without it rather than not at all
+                print(f"[claude] warning: this Claude Code doesn't support --effort ({error}); running without it")
+                self.effort = None
+                with self.lock:
+                    self._spawn()
+                    if self.inflight:
+                        self._write(self.inflight)
+                return
+        # e.g. "error: unknown option": the session shows the CLI's own message, not just "stopped"
+        reason = f"Claude Code: {error.splitlines()[-1][:300]}" if code and error and not self.stopped else None
+        self.exited = True
+        self.on_event("exit", {"value": code, "error": reason})
 
-    def _drain_stderr(self):
-        for line in self.proc.stderr:
+    def _drain_stderr(self, proc):
+        for line in proc.stderr:
             if line.strip():
                 print("[claude]", line.rstrip())
+                self.stderr_tail = (self.stderr_tail + [line.rstrip()])[-5:]

@@ -1,0 +1,10 @@
+{
+  "name": "mocksy-explainer",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Renders Mocksy's model-answer explainer videos (headless Chrome + ffmpeg)",
+  "type": "module",
+  "dependencies": {
+    "playwright-core": "1.56.1"
+  }
+}

@@ -9,6 +9,7 @@ ROOT = Path(__file__).resolve().parent.parent
 PROMPTS = ROOT / "prompts"
 PACKS = PROMPTS / "packs"
 MODELS = ROOT / "models"
+LANGUAGES = {"en": "English", "es": "Spanish"}
 
 with open(ROOT / "config.toml", "rb") as f:
     DEFAULTS = tomllib.load(f)
@@ -24,9 +25,12 @@ EDITABLE = {
     "model": DEFAULTS["interviewer"]["model"],
     "feedback_model": DEFAULTS["interviewer"]["feedback_model"],
     "feedback_language": DEFAULTS["interviewer"].get("feedback_language", "en"),
+    "effort": DEFAULTS["interviewer"].get("effort", "default"),
     "speed": DEFAULTS["speech"]["speed"],
     "voice_en": DEFAULTS["speech"]["voices"]["en"],
     "voice_es": DEFAULTS["speech"]["voices"]["es"],
+    # model answer (see config.toml [model_answer])
+    **{f"ma_{k}": v for k, v in DEFAULTS.get("model_answer", {}).items()},
 }
 
 
@@ -44,27 +48,3 @@ def save_settings(patch: dict) -> dict:
     s.update({k: v for k, v in patch.items() if k in EDITABLE and v not in (None, "")})
     SETTINGS_FILE.write_text(json.dumps(s, indent=2))
     return s
-
-
-def load_packs() -> list[dict]:
-    """Interview packs: prompts/packs/*.md with a TOML header between +++ lines.
-
-    Personal packs (e.g. one tailored to a specific company) go in data/packs/,
-    which is gitignored: they show up in the app but never ship with the repo.
-    """
-    packs = []
-    for path in sorted(PACKS.glob("*.md")) + sorted((DATA / "packs").glob("*.md")):
-        text = path.read_text()
-        _, header, body = text.split("+++", 2)
-        meta = tomllib.loads(header)
-        meta["id"] = path.stem
-        meta["body"] = body.strip()
-        packs.append(meta)
-    return packs
-
-
-def get_pack(pack_id: str) -> dict:
-    for p in load_packs():
-        if p["id"] == pack_id:
-            return p
-    raise KeyError(pack_id)

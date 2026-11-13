@@ -1,11 +1,13 @@
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore, type FormEvent } from "react";
-import { api, subscribe, type AppMeta, type Feedback, type Message, type SessionMeta } from "../api";
+import { api, subscribe, type AppMeta, type Feedback, type Latency, type Message, type SessionMeta } from "../api";
 import { useConfirm } from "../components/Confirm";
 import FeedbackPanel from "../components/FeedbackPanel";
+import ModelAnswerPanel from "../components/ModelAnswerPanel";
 import Transcript from "../components/Transcript";
 import Whiteboard, { type WhiteboardHandle } from "../components/Whiteboard";
-import { Mic, type MicMode, type MicState } from "../lib/audio";
-import { player } from "../lib/player";
+import { ADAPTIVE_END, ADAPTIVE_FAST_END, Mic, type MicMode, type MicState } from "../lib/audio";
+import { HeldReplies } from "../lib/hold";
+import { player, type Clip } from "../lib/player";
 import { fmt, go, store, voiceName } from "../lib/util";
 import { startIntent } from "./Home";
 
@@ -15,6 +17,13 @@ const TOOL_STATUS: Record<string, string> = {
 };
 
 interface Server { state: string; detail: string; since: number }
+
+/** The "pause that ends your turn" setting: "auto" (adaptive, never under 1.3 s), "fast"
+ * (adaptive, 1 s after a finished-sounding answer) or a fixed number of ms. */
+function setEndSilence(m: Mic, value: string) {
+  m.endSilenceMs = +value > 0 ? +value : null;
+  m.endOfTurn = value === "fast" ? ADAPTIVE_FAST_END : ADAPTIVE_END;
+}
 
 function useNow(ms: number) {
   const [now, setNow] = useState(() => Date.now() / 1000);
@@ -31,7 +40,7 @@ export default function SessionView({ id, meta: app }: { id: string; meta: AppMe
   const [messages, setMessages] = useState<Message[]>([]);
   const [feedback, setFeedback] = useState<Feedback | null>(null);
   const [server, setServer] = useState<Server>({ state: "idle", detail: "", since: 0 });
-  const [tab, setTab] = useState<"chat" | "feedback">("chat");
+  const [tab, setTab] = useState<"chat" | "feedback" | "answer">("chat");
   const [flashId, setFlashId] = useState<number | null>(null);
   const [micState, setMicState] = useState<MicState>("off");
   const [level, setLevel] = useState(0);
@@ -40,6 +49,7 @@ export default function SessionView({ id, meta: app }: { id: string; meta: AppMe
   const [micError, setMicError] = useState("");
   const [synced, setSynced] = useState<Date | null>(null);
   const [error, setError] = useState("");
+  const [debug, setDebug] = useState(() => new URLSearchParams(location.search).has("debug") || store.get("latencyDebug", "") === "1");
 
   const board = useRef<WhiteboardHandle>(null);
   const mic = useRef<Mic>(null as unknown as Mic);
@@ -48,10 +58,22 @@ export default function SessionView({ id, meta: app }: { id: string; meta: AppMe
   messagesRef.current = messages;
   const metaRef = useRef(meta);
   metaRef.current = meta;
+  // replies that arrive while the candidate talks (see lib/hold.ts), and what was played of each
+  const held = useRef(new HeldReplies());
+  const played = useRef(new Map<number, number>());
+  const announced = useRef(new Map<number, number>());   // when each reply's first clip was announced
+  const inFlight = useRef(0);     // transcriptions in flight (they can overlap)
+  const playHeld = useCallback(() => {
+    for (const clip of held.current.release()) {
+      const m = messagesRef.current.find((x) => x.id === clip.message_id);
+      if (metaRef.current?.status === "live" && !m?.interrupted && !held.current.isDropped(clip)) player.enqueue(clip);
+    }
+  }, []);
 
   const current = useSyncExternalStore((cb) => player.subscribe(cb), () => player.current);
   const needsGesture = useSyncExternalStore((cb) => player.subscribe(cb), () => player.needsGesture);
   const live = meta?.status === "live";
+  const hasBoard = meta?.whiteboard !== false;
 
   const upsert = useCallback((m: Message) => {
     setMessages((list) => {
@@ -82,9 +104,14 @@ export default function SessionView({ id, meta: app }: { id: string; meta: AppMe
         case "audio": {
           const m = messagesRef.current.find((x) => x.id === ev.message_id);
           if (m) upsert({ ...m, audio: { ...(m.audio || {}), [ev.index]: ev.url } });
-          if (metaRef.current?.status === "live" && !m?.interrupted && mic.current.state !== "speaking") {
-            player.enqueue({ message_id: ev.message_id, index: ev.index, url: ev.url });
-          }
+          if (metaRef.current?.status !== "live" || m?.interrupted) break;
+          const clip: Clip = { message_id: ev.message_id, index: ev.index, url: ev.url };
+          if (held.current.isDropped(clip)) break;   // dropped as unheard; the server just hasn't said so yet
+          if (ev.index === 0) announced.current.set(ev.message_id, performance.now());
+          // the candidate is talking (or their words are being transcribed): hold the reply until
+          // we know whether that was a real turn (then it's dropped) or just noise (then it plays)
+          if (held.current.shouldHold(clip, mic.current.state === "speaking" || inFlight.current > 0)) held.current.hold(clip);
+          else player.enqueue(clip);
           break;
         }
         case "status":
@@ -97,6 +124,7 @@ export default function SessionView({ id, meta: app }: { id: string; meta: AppMe
         case "meta":
           setMeta((prev) => {
             if (prev?.status === "live" && ev.meta.status !== "live") {
+              held.current.clear();
               mic.current.disable();
               if (ev.meta.status === "evaluating") setTab("feedback");
             }
@@ -112,42 +140,77 @@ export default function SessionView({ id, meta: app }: { id: string; meta: AppMe
     return () => {
       off();
       player.stop();
+      held.current.clear();
       mic.current.disable();
     };
   }, [id, upsert]);
+
 
   // ---------------------------------------------------------------- microphone wiring
   useEffect(() => {
     const m = mic.current;
     m.setMode(store.get("micMode", "hands-free") as MicMode);
-    m.endSilenceMs = +store.get("endSilence", "1300");
-    m.isPlaybackActive = () => player.playing;
+    setEndSilence(m, store.get("endSilence", "auto"));
+    m.isPlaybackActive = () => player.playing && !player.paused;
     m.onState = setMicState;
     m.onLevel = setLevel;
     m.onSpeechStart = () => {
       setNotice("");
-      const clip = player.current;
-      if (clip) {   // barge-in: stop talking and tell the interviewer what was heard
-        player.stop();
-        void api.interrupt(id, clip.message_id, clip.index).catch(() => {});
-      }
+      player.pause();  // maybe a barge-in: pause until we know it's a real turn, not a cough
       void api.activity(id, true).catch(() => {});
     };
-    m.onUtterance = async (wav) => {
+    m.onDiscard = () => {     // too short to be a turn (a cough, a click): carry on talking
+      void api.activity(id, false).catch(() => {});
+      player.unpause();
+      playHeld();
+    };
+    m.onUtterance = async (wav, { silenceMs }) => {
+      const vadAt = performance.now();
+      // speech over the interviewer paused it; it stays paused until we know this is a real turn
+      const barged = player.paused ? player.current : null;
+      const carryOn = () => { player.unpause(); playHeld(); };
       void api.activity(id, false).catch(() => {});
       setTranscribing(true);
+      inFlight.current++;
+      let counted = true;
+      const done = () => { if (counted) { counted = false; inFlight.current--; } };
+      // the interviewer gets the latest drawing with what you said: export it while Whisper runs
+      const synced = board.current?.sync().catch(() => {});
       try {
-        const text = await api.transcribe(id, wav);
-        if (!text) { setNotice("Didn't catch that — please say it again."); return; }
-        await board.current?.sync();  // the interviewer gets the latest drawing with what you said
+        const text = await api.transcribe(id, wav, { vadAt, silenceMs });
+        done();
+        if (!text) { setNotice("Didn't catch that — please say it again."); carryOn(); return; }
+        // a real turn: stop the reply it talked over, drop replies that arrived meanwhile (unheard),
+        // and tell the interviewer what was heard before it reads this turn
+        const interrupts = held.current.drop(played.current);
+        if (barged && player.current === barged) {
+          player.stop();
+          held.current.dropReply(barged.message_id);
+          if (!interrupts.some((d) => d.message_id === barged.message_id)) {
+            interrupts.push({ message_id: barged.message_id, heard_index: played.current.get(barged.message_id) ?? -1 });
+          }
+        }
+        await Promise.all(interrupts.map((d) => api.interrupt(id, d.message_id, d.heard_index).catch(() => {})));
+        await synced;
         await api.say(id, text);
       } catch (e) {
         setNotice("Transcription failed: " + (e as Error).message);
+        carryOn();
       } finally {
-        setTranscribing(false);
+        done();
+        setTranscribing(inFlight.current > 0);
       }
     };
-  }, [id]);
+    // first clip of a reply starts playing: closes that turn's latency record
+    player.onStart = (clip) => {
+      played.current.set(clip.message_id, Math.max(clip.index, played.current.get(clip.message_id) ?? -1));
+      if (clip.index === 0 && metaRef.current?.status === "live") {
+        const arrived = announced.current.get(clip.message_id) ?? performance.now();
+        void api.played(id, clip.message_id, clip.index, Math.round(performance.now() - arrived)).catch(() => {});
+      }
+    };
+    return () => { player.onStart = () => {}; };
+  }, [id, playHeld]);
 
   const enableMic = useCallback(async () => {
     try { await mic.current.enable(); setMicError(""); }
@@ -202,6 +265,7 @@ export default function SessionView({ id, meta: app }: { id: string; meta: AppMe
   async function end() {
     if (live && !(await ask("End the interview and write the evaluation?", "End & evaluate"))) return;
     player.stop();
+    held.current.clear();
     mic.current.disable();
     await api.end(id);
   }
@@ -209,6 +273,7 @@ export default function SessionView({ id, meta: app }: { id: string; meta: AppMe
   async function stop() {
     if (!(await ask("Stop the interview without an evaluation? You can resume it or evaluate it later from this page.", "Stop"))) return;
     player.stop();
+    held.current.clear();
     mic.current.disable();
     await api.stop(id);
   }
@@ -233,21 +298,25 @@ export default function SessionView({ id, meta: app }: { id: string; meta: AppMe
   if (error) return <div className="boot">{error} <a href="#/">Back</a></div>;
   if (!meta) return <div className="boot">Loading session…</div>;
 
-  const status = statusLine({ live, server, micState, mode: mic.current.mode, transcribing, playing: !!current, notice, needsGesture, evaluating: meta.status === "evaluating" });
+  const status = statusLine({ live, hasBoard, server, micState, mode: mic.current.mode, transcribing, playing: !!current, notice, needsGesture, evaluating: meta.status === "evaluating" });
   const showFeedbackTab = meta.status !== "live" || !!feedback;
 
   return (
     <div className="session">
       <Header
         meta={meta} app={app} live={live} onBack={back} onEnd={end} onStop={stop} onResume={resume} onPhase={changePhase}
-        onEndSilence={(ms) => { mic.current.endSilenceMs = ms; store.set("endSilence", String(ms)); }}
+        onEndSilence={(value) => { setEndSilence(mic.current, value); store.set("endSilence", value); }}
+        debug={debug} onDebug={(on) => { setDebug(on); store.set("latencyDebug", on ? "1" : ""); }}
       />
-      <main className="workspace">
+      <main className={`workspace${hasBoard ? "" : " solo"}`}>
         <aside className="side">
           <nav className="tabs" role="tablist">
             <button role="tab" aria-selected={tab === "chat"} className={tab === "chat" ? "active" : ""} onClick={() => setTab("chat")}>Conversation</button>
             {showFeedbackTab && (
               <button role="tab" aria-selected={tab === "feedback"} className={tab === "feedback" ? "active" : ""} onClick={() => setTab("feedback")}>Evaluation</button>
+            )}
+            {feedback && !live && meta.model_answer !== false && (
+              <button role="tab" aria-selected={tab === "answer"} className={tab === "answer" ? "active" : ""} onClick={() => setTab("answer")}>Model answer</button>
             )}
           </nav>
 
@@ -261,10 +330,11 @@ export default function SessionView({ id, meta: app }: { id: string; meta: AppMe
               {live && (
                 <div className="composer">
                   <div className="status-line"><span className={`dot ${status.dot}`} /><span>{status.text}</span></div>
+                  {debug && <LatencyReadout messages={messages} />}
                   <div className="mic-row">
                     <MicButton state={micState} level={level} onClick={micAction} />
                     <MicHelp state={micState} mode={mic.current.mode} />
-                    <button className="btn ghost" onClick={askToLook} title="Ask the interviewer to look at your whiteboard now">👀 Look at my board</button>
+                    {hasBoard && <button className="btn ghost" onClick={askToLook} title="Ask the interviewer to look at your whiteboard now">👀 Look at my board</button>}
                   </div>
                   <form className="type-form" onSubmit={sendTyped}>
                     <input value={typed} onChange={(e) => setTyped(e.target.value)} placeholder="…or type here and press Enter" autoComplete="off" />
@@ -272,12 +342,14 @@ export default function SessionView({ id, meta: app }: { id: string; meta: AppMe
                 </div>
               )}
             </div>
+          ) : tab === "answer" && feedback ? (
+            <div className="tab-body scroll"><ModelAnswerPanel meta={meta} app={app} /></div>
           ) : (
             <div className="tab-body scroll"><FeedbackPanel meta={meta} feedback={feedback} onJump={jumpTo} /></div>
           )}
         </aside>
 
-        <section className="board-wrap">
+        {hasBoard && <section className="board-wrap">
           <div className="board-bar small muted">
             {!live ? "Session whiteboard (read-only)."
               : synced ? `The interviewer has your whiteboard · updated ${synced.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit", second: "2-digit" })}`
@@ -286,7 +358,7 @@ export default function SessionView({ id, meta: app }: { id: string; meta: AppMe
           <div className="board">
             <Whiteboard ref={board} sessionId={id} readOnly={!live} onSynced={setSynced} />
           </div>
-        </section>
+        </section>}
       </main>
     </div>
   );
@@ -294,9 +366,10 @@ export default function SessionView({ id, meta: app }: { id: string; meta: AppMe
 
 // ------------------------------------------------------------------ header
 
-function Header({ meta, app, live, onBack, onEnd, onStop, onResume, onPhase, onEndSilence }: {
+function Header({ meta, app, live, onBack, onEnd, onStop, onResume, onPhase, onEndSilence, debug, onDebug }: {
   meta: SessionMeta; app: AppMeta; live: boolean;
-  onBack: () => void; onEnd: () => void; onStop: () => void; onResume: () => void; onPhase: (key: string, label: string) => void; onEndSilence: (ms: number) => void;
+  onBack: () => void; onEnd: () => void; onStop: () => void; onResume: () => void; onPhase: (key: string, label: string) => void; onEndSilence: (value: string) => void;
+  debug: boolean; onDebug: (on: boolean) => void;
 }) {
   const now = useNow(500);
   const [open, setOpen] = useState(false);
@@ -329,7 +402,7 @@ function Header({ meta, app, live, onBack, onEnd, onStop, onResume, onPhase, onE
       {live && (
         <div className="settings-wrap">
           <button className="icon-btn" onClick={() => setOpen((o) => !o)} title="Voice settings" aria-expanded={open}>⚙</button>
-          {open && <VoiceSettings meta={meta} app={app} onEndSilence={onEndSilence} onClose={() => setOpen(false)} />}
+          {open && <VoiceSettings meta={meta} app={app} onEndSilence={onEndSilence} debug={debug} onDebug={onDebug} onClose={() => setOpen(false)} />}
         </div>
       )}
       {live && <button className="btn" onClick={onStop} title="Pause: end without an evaluation, resume later">Stop</button>}
@@ -341,11 +414,12 @@ function Header({ meta, app, live, onBack, onEnd, onStop, onResume, onPhase, onE
   );
 }
 
-function VoiceSettings({ meta, app, onEndSilence, onClose }: {
-  meta: SessionMeta; app: AppMeta; onEndSilence: (ms: number) => void; onClose: () => void;
+function VoiceSettings({ meta, app, onEndSilence, debug, onDebug, onClose }: {
+  meta: SessionMeta; app: AppMeta; onEndSilence: (value: string) => void; debug: boolean; onDebug: (on: boolean) => void; onClose: () => void;
 }) {
   const key = meta.lang === "es" ? "voice_es" : "voice_en";
   const prefixes = meta.lang === "es" ? ["ef", "em"] : ["af", "am", "bf", "bm"];
+  const [endValue, setEndValue] = useState(() => store.get("endSilence", "auto"));
   const ref = useRef<HTMLDivElement>(null);
   useEffect(() => {
     const onDoc = (e: MouseEvent) => { if (!ref.current?.parentElement?.contains(e.target as Node)) onClose(); };
@@ -366,13 +440,44 @@ function VoiceSettings({ meta, app, onEndSilence, onClose }: {
         </select>
       </label>
       <label className="field"><span>Pause that ends your turn</span>
-        <select defaultValue={store.get("endSilence", "1300")} onChange={(e) => onEndSilence(+e.target.value)}>
+        <select value={endValue} onChange={(e) => { setEndValue(e.target.value); onEndSilence(e.target.value); }}>
+          <option value="auto">Adaptive (1.3–1.8 s)</option>
+          <option value="fast">Adaptive, faster (1–1.8 s)</option>
           <option value="900">Short (0.9 s)</option>
           <option value="1300">Normal (1.3 s)</option>
           <option value="2000">Long (2 s)</option>
           <option value="3000">Very long (3 s)</option>
         </select>
+        {endValue === "fast" && <p className="hint small muted">Replies sooner, but may cut you off during a long thinking pause.</p>}
       </label>
+      <label className="toggle field">
+        <input type="checkbox" checked={debug} onChange={(e) => onDebug(e.target.checked)} />
+        Show response times
+      </label>
+    </div>
+  );
+}
+
+// ------------------------------------------------------------------ latency readout (debug)
+
+const STAGE_LABELS: [keyof Latency, string][] = [
+  ["silence_ms", "pause"], ["upload_ms", "upload"], ["stt_ms", "STT"], ["handoff_ms", "handoff"],
+  ["model_ms", "model"], ["chunk_ms", "1st chunk"], ["tts_ms", "TTS"], ["play_ms", "play"],
+];
+
+/** The last answered turn: how long from the end of your speech to the interviewer's first audio. */
+function LatencyReadout({ messages }: { messages: Message[] }) {
+  const last = [...messages].reverse().find((m) => m.role === "candidate" && m.latency)?.latency;
+  if (!last) return <div className="latency small muted">Response times appear after your next turn.</div>;
+  const s = (ms?: number) => (ms === undefined ? "–" : (ms / 1000).toFixed(2));
+  const heard = last.total_ms !== undefined ? (last.silence_ms ?? 0) + last.total_ms : undefined;
+  return (
+    <div className="latency small muted" title="End of your speech → interviewer's first audio, per stage (seconds)">
+      <b>{s(heard)} s</b>{last.total_to === "tts_ready" && " (until audio ready)"}
+      {STAGE_LABELS.filter(([k]) => last[k] !== undefined).map(([k, label]) => (
+        <span key={k}> · {label} {s(last[k] as number)}</span>
+      ))}
+      {!!last.tools_before_speech && <span> · {last.tools_before_speech} tool call(s) first</span>}
     </div>
   );
 }
@@ -407,7 +512,7 @@ function MicHelp({ state, mode }: { state: MicState; mode: MicMode }) {
 }
 
 function statusLine(s: {
-  live: boolean; server: Server; micState: MicState; mode: MicMode; transcribing: boolean;
+  live: boolean; hasBoard: boolean; server: Server; micState: MicState; mode: MicMode; transcribing: boolean;
   playing: boolean; notice: string; needsGesture: boolean; evaluating: boolean;
 }): { text: string; dot: string } {
   if (s.evaluating) return { text: "Writing your evaluation…", dot: "think" };
@@ -419,7 +524,10 @@ function statusLine(s: {
   if (s.notice) return { text: s.notice, dot: "err" };
   switch (s.server.state) {
     case "preparing": return { text: "Preparing the interview…", dot: "think" };
-    case "tool": return { text: TOOL_STATUS[s.server.detail] || "Thinking…", dot: "think" };
+    case "tool": {
+      const text = s.server.detail === "Read" && !s.hasBoard ? "Checking notes…" : TOOL_STATUS[s.server.detail];
+      return { text: text || "Thinking…", dot: "think" };
+    }
     case "thinking": {
       const slow = s.server.since && Date.now() - s.server.since > 60000;
       return { text: slow ? "Taking longer than usual… (you can keep talking)" : "The interviewer is thinking…", dot: "think" };

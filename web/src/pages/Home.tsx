@@ -22,6 +22,7 @@ export default function Home({ meta }: { meta: AppMeta }) {
   const [micMode, setMicMode] = useState<MicMode>(store.get("micMode", "hands-free") as MicMode);
   const [model, setModel] = useState(meta.settings.model);
   const [feedbackModel, setFeedbackModel] = useState(meta.settings.feedback_model);
+  const [effort, setEffort] = useState(meta.settings.effort || "default");
   const [starting, setStarting] = useState(false);
   const [history, setHistory] = useState<SessionSummary[] | null>(null);
 
@@ -40,8 +41,8 @@ export default function Home({ meta }: { meta: AppMeta }) {
     store.set("lang", lang);
     store.set("micMode", micMode);
     try {
-      await api.saveSettings({ model, feedback_model: feedbackModel });
-      const s = await api.createSession({ pack, company: company.trim(), level, focus: focus.trim(), problem: problem.trim(), lang, model, feedback_model: feedbackModel });
+      await api.saveSettings({ model, feedback_model: feedbackModel, effort });
+      const s = await api.createSession({ pack, company: company.trim(), level, focus: focus.trim(), problem: problem.trim(), lang, model, feedback_model: feedbackModel, effort });
       startIntent.autoEnableMic = true;
       go(s.meta.id);
     } catch (err) {
@@ -62,14 +63,17 @@ export default function Home({ meta }: { meta: AppMeta }) {
           <h2>New interview</h2>
 
           <fieldset className="field">
-            <legend>Interview type</legend>
+            <legend className="legend-row">Interview type <a href="#/packs" className="small">Manage types</a></legend>
             <div className="packs">
               {meta.packs.map((p) => (
                 <label key={p.id} className="pack">
                   <input type="radio" name="pack" checked={p.id === pack} onChange={() => choosePack(p.id)} />
                   <strong>{p.title}</strong>
                   <span>{p.description}</span>
-                  <span className="phase-pills">{p.phases.map((ph) => `${ph.label} ${ph.minutes}′`).join(" · ")}</span>
+                  <span className="phase-pills">
+                    {p.phases.map((ph) => `${ph.label} ${ph.minutes}′`).join(" · ")}
+                    {!p.whiteboard && " · no whiteboard"}{!p.builtin && " · personal"}
+                  </span>
                 </label>
               ))}
             </div>
@@ -131,6 +135,12 @@ export default function Home({ meta }: { meta: AppMeta }) {
                 </select>
               </label>
             </div>
+            <label className="field">
+              <span>Interviewer effort</span>
+              <select value={effort} onChange={(e) => setEffort(e.target.value)}>
+                {meta.efforts.map((x) => <option key={x} value={x}>{x === "default" ? "Default" : x === "low" ? "Low (answers sooner)" : x[0].toUpperCase() + x.slice(1)}</option>)}
+              </select>
+            </label>
             <p className="hint">They run on your Claude Code login. A fast model works best for the conversation; a deeper one for the evaluation.</p>
           </details>
 
