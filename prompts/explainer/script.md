@@ -15,6 +15,12 @@ Read those files, nothing else. Then write the script with the Write tool to exa
 - Be concrete: real numbers, real components, real data models and APIs. When a figure isn't given in `scenario.md`,
   pick a reasonable one, say it as an assumption in the narration ("say, ten million links a day") and list it
   in `assumptions`.
+- Show before you tell: never quote an example's results (sample answers, outputs, measurements) without first
+  showing the input that produces them, and walk through at least one example step by step on screen.
+- Define every technical term the first time it's used (in a sentence, before relying on it). For example, say
+  what a tree's centroid is before arguing about splitting at it; don't just name it.
+- If the video ends with an extension or harder variant, pose it to the viewer as an open challenge (for example
+  "Can you solve this version?") with at most a hint, not as a solved aside.
 - Narration in {language_name}, spoken style, short sentences, no lists read aloud, no markdown, no symbols the
   voice would read literally (write "per second", not "/s"). Scene titles: short (max ~40 characters).
 - `show` directions are for an animator: what appears, where, and when within the beat, using only things the
