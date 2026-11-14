@@ -140,7 +140,8 @@ def validate_diagram(d) -> list[str]:
 TECH_CANDIDATE = re.compile(
     r"\b(raft|leader|election|vote[sd]?|votes|term|nodes?|follower|quorum|keys?|index|generation|replicas?|"
     r"servers?|search|rank\w*|re-?rank\w*|retriev\w*|filter\w*|scor\w*|matches|match|query|queries|"
-    r"recommendations?|items?|solutions?|líder|elección|votos?|nodos?|claves?|réplicas?|servidor(es)?)\b", re.I)
+    r"recommendations?|items?|solutions?|diagonals?|edges?|vert(ex|ices)|triangles?|points?|segments?|intervals?|"
+    r"paths?|pairs?|cuts?|splits?|pivots?|moves?|values?|partitions?|centroids?|líder|elección|votos?|nodos?|claves?|réplicas?|servidor(es)?)\b", re.I)
 
 # What someone did or left out, said to them: always about an attempt (hypotheticals are excluded below)
 YOU_DID = (r"went|talked|mentioned|said|chose|drew|proposed|suggested|skipped|missed|forgot|jumped|focused|"

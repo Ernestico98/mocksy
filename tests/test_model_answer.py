@@ -633,6 +633,8 @@ ALLOWED = [
     "You'd want a queue here.", "The user session token expires after an hour.", "Store session state in Redis.",
     "In Raft, a follower becomes a candidate and requests votes.", "El nodo pasa a candidato y pide votos.",
     "Candidate keys identify a row.", "The candidate generation step retrieves 500 items.", "Candidates are re-ranked by score.",
+    "Several candidate diagonals flash over a polygon; the one with the smallest gap stays.",
+    "Try each candidate pivot and keep the best split.", "Candidate edges are checked in order.",
     "Add a forgot password flow.", "A missed heartbeat triggers failover.", "The job missed its deadline.",
     "A relevance score ranks results.", "La puntuación de relevancia ordena los resultados.",
     "The session expires after 30 minutes.", "Mock the payment API in tests.", "A mock server helps testing.",
