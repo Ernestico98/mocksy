@@ -149,7 +149,7 @@ function Progress({ st }: { st: ModelAnswerState }) {
               <span className="lab">{st.labels[k]}</span>
               <span className="det small muted">{s.detail}</span>
               {s.status === "running" && s.progress != null && (
-                <div className="bar"><div style={{ width: `${Math.round(s.progress * 100)}%` }} /></div>
+                <div className="ma-bar"><div style={{ width: `${Math.round(s.progress * 100)}%` }} /></div>
               )}
             </li>
           );
