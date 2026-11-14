@@ -242,8 +242,8 @@ textarea.mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; fon
 .ma-stages li.failed .ic { color: var(--rec); }
 .ma-stages li.running .lab { font-weight: 600; }
 .ma-stages li.pending .lab { color: var(--muted); }
-.ma-stages .bar { grid-column: 2 / -1; height: 5px; background: var(--panel-2); border: 1px solid var(--line); border-radius: 99px; overflow: hidden; }
-.ma-stages .bar div { height: 100%; background: var(--think); transition: width .3s; }
+.ma-stages .ma-bar { grid-column: 2 / -1; height: 5px; background: var(--panel-2); border: 1px solid var(--line); border-radius: 99px; overflow: hidden; }
+.ma-stages .ma-bar div { height: 100%; background: var(--think); transition: width .3s; }
 .ma-error { margin: 0; white-space: pre-wrap; }
 .ma-review { margin: 0; }
 .ma-review ul { margin: 6px 0 0; padding-left: 18px; }
