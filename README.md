@@ -256,6 +256,6 @@ Architecture notes, the interviewer's message protocol and the dev workflow are 
 
 ## Status
 
-A personal project, built to prepare for my own interviews. It's developed and used on macOS with
+A personal project for practicing technical interviews out loud. It's developed and used on macOS with
 Apple Silicon; Linux support is newer and less tested. Designed for a desktop browser. Next on the
 list: more interview types (behavioral, frontend system design) and progress tracking across sessions.
